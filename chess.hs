@@ -13,12 +13,9 @@ instance Hashable Square where
 
 data Color = Black | White deriving (Show, Eq)
 
-data PieceType = Pawn | Rook | Bishop | Knight deriving (Show)
+data PieceType = Queen | Pawn | Rook | Bishop | Knight deriving (Show)
 
 data Piece = Piece PieceType Color Square deriving (Show)
-
-type MovePredicates = (Square, [Maybe Piece -> Bool])
-type MoveList = [(Square, [MovePredicates])]
 
 data Bounds = Bounds {minX :: Int, minY :: Int, maxX :: Int, maxY :: Int} deriving (Show)
 
@@ -36,39 +33,43 @@ data Board = Board BoardMap Bounds
 lookupS :: Board -> Square -> Maybe Piece
 lookupS (Board brd _) sqr = HMap.lookup sqr brd
 
+showSquares :: Board -> [Square] -> String
+showSquares (Board brd (Bounds minX minY maxX maxY)) sqrs =
+  let width = maxX - minX + 1
+      height = maxY - minY + 1
+
+      -- Make row and column coordinate axes
+      cols = ' ':[toEnum (x + 64) :: Char | x <- [1 .. width]]
+      rows = [head . show $ x | x <- [height, height - 1 .. 1]]
+
+      -- Generate a list of strings that alternate between '.' and '#'
+      -- Each string represents a row on the chess board
+      textSquares =
+        [[if odd (x+y) then ' ' else '#' | x <- [1 .. width]] | y <- [1 .. height]]
+
+      -- Generate a list with similar structure as the one above, but fill it with
+      -- corresponding Square objects
+      squares = reverse [[(Square x y) | x <- [1 .. width]] | y <- [1 .. height]]
+      -- Zip the previous two lists together to create a list of list of pairs of
+      -- empty square characters and Square objects
+      textSqrPairs = zipWith zip textSquares squares
+      -- Map through each sublist, look for a piece on the board on each square.
+      -- If a piece is found, replace that character with the pieceSym of the piece.
+      -- If a piece is not found, simply return the empty square character of that square.
+      filledBoard =
+        (flip map) textSqrPairs $ map (\pair -> if (snd pair) `elem` sqrs
+                                                then 'X'
+                                                else case HMap.lookup (snd pair) brd of
+                                                       Nothing -> fst pair
+                                                       Just piece -> pieceSym piece)
+      axesBoard = (transpose $ rows:(transpose filledBoard)) ++ [cols]
+  in unlines $ map (intersperse '|') axesBoard
+
 instance Show Board where
-  show (Board brd bnds) = let width = maxX bnds - minX bnds + 1
-                              height = maxY bnds - minY bnds + 1
+  show brd = showSquares brd []
 
-                              -- Make row and column coordinate axes
-                              cols = ' ':[toEnum (x + 64) :: Char | x <- [1 .. width]]
-                              rows = [head . show $ x | x <- [height, height - 1 .. 1]]
-  
-                              -- Generate a list of strings that alternate between '.' and '#'
-                              -- Each string represents a row on the chess board
-                              textSquares =
-                                [[if odd (x+y) then '.' else '#' | x <- [1 .. width]] | y <- [1 .. height]]
-                              -- Generate a list with similar structure as the one above, but fill it with
-                              -- corresponding Square objects
-                              squares = reverse [[(Square x y) | x <- [1 .. width]] | y <- [1 .. height]]
-                              -- Zip the previous two lists together to create a list of list of pairs of
-                              -- empty square characters and Square objects
-                              textSqrPairs = zipWith zip textSquares squares
-                              -- Map through each sublist, look for a piece on the board on each square.
-                              -- If a piece is found, replace that character with the pieceSym of the piece.
-                              -- If a piece is not found, simply return the empty square character of that square.
-                              filledBoard =
-                                (flip map) textSqrPairs (\pairList ->
-                                                           (flip map) pairList (\pair -> 
-                                                                                  case HMap.lookup (snd pair) brd of
-                                                                                    Nothing -> fst pair
-                                                                                    Just piece -> pieceSym piece))
-
-                              -- Add row and column coordinate axes to board
-                              finalBoard = (transpose $ rows:(transpose filledBoard)) ++ [cols]
-                          -- Before returning the board, add a space between every square and unline it
-                          in unlines $ map (intersperse ' ') finalBoard
-
+printSquares :: Board -> [Square] -> IO ()
+printSquares brd sqrs = do putStrLn $ showSquares brd sqrs
 
 sameColor :: BoardMap -> Color -> Square -> Bool
 sameColor brd col1 sqr = case HMap.lookup sqr brd of
@@ -112,9 +113,12 @@ targetSquares (Board brd bnds) (Piece Bishop color (Square col row)) =
   in concat $ map (takeLong brd) $ [ne, se, sw, nw]
 
 targetSquares (Board brd bnds) (Piece Knight color (Square col row)) =
-  let set1 = [(Square (col + x) (col + y)) | x <- [-1, 1], y <- [-2, 2]]
-      set2 = [(Square (col + x) (col + y)) | x <- [-2, 2], y <- [-1,1]]
+  let set1 = [(Square (col + x) (row + y)) | x <- [-1, 1], y <- [-2, 2]]
+      set2 = [(Square (col + x) (row + y)) | x <- [-2, 2], y <- [-1,1]]
   in set1 ++ set2
+
+targetSquares brd (Piece Queen color sqr) =
+  concat $ map (targetSquares brd) [(Piece Rook color sqr), (Piece Bishop color sqr)]
 
 validMoves :: Board -> Piece -> [Square]
 validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
@@ -138,16 +142,19 @@ strSqr (a:n:rs) = Square (fromEnum a - 64) (fromEnum n - 48)
 genBoard :: Bounds -> Board
 genBoard bnds = let whitePawns = [(Square x 2, Piece Pawn White (Square x 2)) | x <- [1..8]]
                     blackPawns = [(Square x 7, Piece Pawn Black (Square x 7)) | x <- [1..8]]
-                    -- rook = [(Square 5 5, Piece Bishop White (Square 5 5))]
-                in Board (HMap.fromList (whitePawns ++ blackPawns)) bnds
+                    knight = [(Square 5 4, Piece Knight White (Square 5 5))]
+                in Board (HMap.fromList (whitePawns ++ blackPawns ++ knight)) bnds
 
 moves :: Board -> Square -> [Square]
 moves brd sqr = case lookupS brd sqr of Nothing -> []
                                         Just p -> validMoves brd p
 
+insertPiece :: Board -> Piece -> Board
+insertPiece (Board brd bnds) (Piece t c sqr) =
+  (Board (HMap.insert sqr (Piece t c sqr) brd) bnds)
+
+printMoves :: Board -> Piece -> IO ()
+printMoves brd pc = printSquares (insertPiece brd pc) $ validMoves brd pc
+
 board = genBoard (Bounds 1 1 8 8)
-p1 = Piece Pawn White (Square 5 2)
-p2 = Piece Pawn Black (Square 5 7)
-r1 = Piece Rook White (Square 5 4)
-b1 = Piece Bishop White (Square 5 5)
 
