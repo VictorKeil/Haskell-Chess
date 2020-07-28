@@ -111,6 +111,11 @@ targetSquares (Board brd bnds) (Piece Bishop color (Square col row)) =
       nw = [Square (col - x) (row + x) | x <- [1 .. max maxNorth maxWest]]
   in concat $ map (takeLong brd) $ [ne, se, sw, nw]
 
+targetSquares (Board brd bnds) (Piece Knight color (Square col row)) =
+  let set1 = [(Square (col + x) (col + y)) | x <- [-1, 1], y <- [-2, 2]]
+      set2 = [(Square (col + x) (col + y)) | x <- [-2, 2], y <- [-1,1]]
+  in set1 ++ set2
+
 validMoves :: Board -> Piece -> [Square]
 validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
   let (direction, initRow) = if color == White then (1,2) else (-1, 7)
