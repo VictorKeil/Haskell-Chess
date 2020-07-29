@@ -1,3 +1,4 @@
+import Data.Tuple
 import Data.List
 import qualified Data.HashMap as HMap
 import Data.Hashable
@@ -13,7 +14,7 @@ instance Hashable Square where
 
 data Color = Black | White deriving (Show, Eq)
 
-data PieceType = King | Queen | Pawn | Rook | Bishop | Knight deriving (Show)
+data PieceType = King | Queen | Pawn | Rook | Bishop | Knight deriving (Eq, Show, Enum, Bounded)
 
 data Piece = Piece PieceType Color Square deriving (Show)
 
@@ -88,10 +89,16 @@ takeUntil f (x:xs) = if f x then x:(takeUntil f xs) else [x]
 takeLong :: BoardMap -> [Square] -> [Square]
 takeLong brd = takeUntil (nullSquare brd)
 
+restrictToBounds :: Bounds -> [Square] -> [Square]
+restrictToBounds (Bounds minX minY maxX maxY) ss = filter inBounds ss
+  where inBounds (Square col row) =
+          (col `elem` [minX .. maxX]) && (row `elem` [minY .. maxY])
+
 targetSquares :: Board -> Piece -> [Square]
 targetSquares (Board brd bnds) (Piece Pawn color (Square col row)) =
   let (direction, initRow) = if color == White then (1,2) else (-1, 7)
-  in [Square (col - 1) (row + direction), Square (col + 1) (row + direction)]
+  in restrictToBounds bnds
+     $ [Square (col - 1) (row + direction), Square (col + 1) (row + direction)]
   
 targetSquares (Board brd bnds) (Piece Rook color (Square col row)) =
   let posX = [Square (col + x) row | x <- [1..maxX bnds - col]]
@@ -106,28 +113,36 @@ targetSquares (Board brd bnds) (Piece Bishop color (Square col row)) =
       maxWest = col - minX bnds
       maxEast = maxX bnds - col
       
-      ne = [Square (col + x) (row + x) | x <- [1 .. max maxNorth maxEast]]
-      se = [Square (col + x) (row - x) | x <- [1 .. max maxSouth maxEast]]
-      sw = [Square (col - x) (row - x) | x <- [1 .. max maxSouth maxWest]]
-      nw = [Square (col - x) (row + x) | x <- [1 .. max maxNorth maxWest]]
+      ne = [Square (col + x) (row + x) | x <- [1 .. min maxNorth maxEast]]
+      se = [Square (col + x) (row - x) | x <- [1 .. min maxSouth maxEast]]
+      sw = [Square (col - x) (row - x) | x <- [1 .. min maxSouth maxWest]]
+      nw = [Square (col - x) (row + x) | x <- [1 .. min maxNorth maxWest]]
   in concat $ map (takeLong brd) $ [ne, se, sw, nw]
 
 targetSquares (Board brd bnds) (Piece Knight color (Square col row)) =
   let set1 = [Square (col + x) (row + y) | x <- [-1, 1], y <- [-2, 2]]
       set2 = [Square (col + x) (row + y) | x <- [-2, 2], y <- [-1,1]]
-  in set1 ++ set2
+  in restrictToBounds bnds $ set1 ++ set2
 
 targetSquares brd (Piece Queen color sqr) =
   concat $ map (targetSquares brd) [(Piece Rook color sqr), (Piece Bishop color sqr)]
 
 targetSquares (Board brd bnds) (Piece King color (Square col row)) =
   let set1 = [Square (col + x) (row + y) | x <- [-1..1], y <- [-1,1]]
-  in set1 ++ [Square (col + x) row | x <- [-1,1]]
+  in restrictToBounds bnds $ set1 ++ [Square (col + x) row | x <- [-1,1]]
 
-targetedSquares :: Board -> Color -> [Square]
+-- Takes a function and its argument, applies the function to the argument and stores
+-- the result and the argument in a pair
+fArgPair :: (a -> b) -> a -> (b, a)
+fArgPair f x = (f x, x)
+
+targetedSquares :: Board -> Color -> [([Square], Piece)]
 targetedSquares (Board brd bnds) color =
-  let enemySqrs = filter (not . sameColor brd color . fst) $ HMap.toList brd
-  in concat $ map (targetSquares (Board brd bnds) . snd) enemySqrs
+  let enemySqrs :: [(Square, Piece)]
+      enemySqrs = filter (not . sameColor brd color . fst) $ HMap.toList brd
+      targetedBy :: [([Square], Piece)]
+      targetedBy = map (fArgPair (targetSquares (Board brd bnds)) . snd) enemySqrs
+  in targetedBy
 
 validMoves :: Board -> Piece -> [Square]
 validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
@@ -140,21 +155,39 @@ validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
       
       tgtSqrs = targetSquares (Board brd bnds) (Piece Pawn color (Square col row))
       validCaptures = filter (\s -> not (sameColor brd color s || nullSquare brd s)) tgtSqrs
-  in validCaptures ++ baseMoves
+  in restrictToBounds bnds $ validCaptures ++ baseMoves
 
 validMoves (Board brd bnds) (Piece King color sqr) =
   let tgtSqrs = targetSquares (Board brd bnds) (Piece King color sqr)
-      nonTargeted = filter (not . (`elem` targetedSquares (Board brd bnds) color)) tgtSqrs
-  in filter (not . sameColor brd color) $ nonTargeted
+      diffColor = filter (not . sameColor brd color) $ tgtSqrs
+  in filter (not . ((flip elem) $ concat $ map fst $ targetedSquares (Board brd bnds) color)) diffColor
   
 validMoves (Board brd bnds) (Piece ptype color sqr) =
   filter (not . sameColor brd color) $ targetSquares (Board brd bnds) (Piece ptype color sqr)
 
-check :: Board -> Piece -> Bool
-check brd (Piece King color sqr) = sqr `elem` targetedSquares brd color
+checks :: Board -> Piece -> [Square]
+checks brd (Piece King color sqr) =
+  let checks = filter ((sqr `elem`) . fst) $ targetedSquares brd color 
+  in map ((\(Piece _ _ sqr) -> sqr) . snd) checks
+
+checkMate :: Board -> Piece -> Bool
+checkMate brd (Piece King color sqr) =
+  let kingCanMove = not . null $ validMoves brd (Piece King color sqr)
+      checks' = checks brd (Piece King color sqr)
+      friendlyTargets = if null checks'
+                        then []
+                        else case lookupS brd (head checks') of
+                               Nothing -> []
+                               Just (Piece _ checkColor _) ->
+                                 concat $ map fst $ targetedSquares brd checkColor
+      canKillCheck = length (friendlyTargets \\ checks') == 1
+  in not . or $ [null checks', kingCanMove, canKillCheck]
 
 strSqr :: String -> Square
 strSqr (a:n:rs) = Square (fromEnum a - 64) (fromEnum n - 48)
+
+emptyBoard :: Board
+emptyBoard = Board HMap.empty (Bounds 1 1 8 8)
 
 genBoard :: Bounds -> Board
 genBoard bnds = let whitePawns = [(Square x 2, Piece Pawn White (Square x 2)) | x <- [1..8]]
@@ -173,5 +206,21 @@ insertPiece (Board brd bnds) (Piece t c sqr) =
 printMoves :: Board -> Piece -> IO ()
 printMoves brd pc = printSquares (insertPiece brd pc) $ validMoves brd pc
 
+testBounds :: Piece -> [Square]
+testBounds pc = let (Board _ bnds) = emptyBoard
+                    ts = targetSquares emptyBoard pc
+                    vm = validMoves emptyBoard pc
+                in (ts \\ restrictToBounds bnds ts) ++ (vm \\ restrictToBounds bnds vm)
+
+testPieces :: [Piece]
+testPieces = nubBy (\(Piece t1 _ _) (Piece t2 _ _) -> t1 == t2) $ concat
+  $ testP [Piece t b s | t <- [minBound .. maxBound::PieceType]
+                       , b <- [Black]
+                       , s <- [Square col row | col <- [1..8], row <- [1..8]]]
+  where testP [] = [] 
+        testP (p:ps) = (if null (testBounds p) then [] else [p] ):(testP ps)
+          
+
 board = genBoard (Bounds 1 1 8 8)
+k1 = Piece King Black (Square 1 5)
 
