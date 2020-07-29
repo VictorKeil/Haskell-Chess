@@ -13,7 +13,7 @@ instance Hashable Square where
 
 data Color = Black | White deriving (Show, Eq)
 
-data PieceType = Queen | Pawn | Rook | Bishop | Knight deriving (Show)
+data PieceType = King | Queen | Pawn | Rook | Bishop | Knight deriving (Show)
 
 data Piece = Piece PieceType Color Square deriving (Show)
 
@@ -113,12 +113,21 @@ targetSquares (Board brd bnds) (Piece Bishop color (Square col row)) =
   in concat $ map (takeLong brd) $ [ne, se, sw, nw]
 
 targetSquares (Board brd bnds) (Piece Knight color (Square col row)) =
-  let set1 = [(Square (col + x) (row + y)) | x <- [-1, 1], y <- [-2, 2]]
-      set2 = [(Square (col + x) (row + y)) | x <- [-2, 2], y <- [-1,1]]
+  let set1 = [Square (col + x) (row + y) | x <- [-1, 1], y <- [-2, 2]]
+      set2 = [Square (col + x) (row + y) | x <- [-2, 2], y <- [-1,1]]
   in set1 ++ set2
 
 targetSquares brd (Piece Queen color sqr) =
   concat $ map (targetSquares brd) [(Piece Rook color sqr), (Piece Bishop color sqr)]
+
+targetSquares (Board brd bnds) (Piece King color (Square col row)) =
+  let set1 = [Square (col + x) (row + y) | x <- [-1..1], y <- [-1,1]]
+  in set1 ++ [Square (col + x) row | x <- [-1,1]]
+
+targetedSquares :: Board -> Color -> [Square]
+targetedSquares (Board brd bnds) color =
+  let enemySqrs = filter (not . sameColor brd color . fst) $ HMap.toList brd
+  in concat $ map (targetSquares (Board brd bnds) . snd) enemySqrs
 
 validMoves :: Board -> Piece -> [Square]
 validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
@@ -132,9 +141,17 @@ validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
       tgtSqrs = targetSquares (Board brd bnds) (Piece Pawn color (Square col row))
       validCaptures = filter (\s -> not (sameColor brd color s || nullSquare brd s)) tgtSqrs
   in validCaptures ++ baseMoves
+
+validMoves (Board brd bnds) (Piece King color sqr) =
+  let tgtSqrs = targetSquares (Board brd bnds) (Piece King color sqr)
+      nonTargeted = filter (not . (`elem` targetedSquares (Board brd bnds) color)) tgtSqrs
+  in filter (not . sameColor brd color) $ nonTargeted
   
 validMoves (Board brd bnds) (Piece ptype color sqr) =
   filter (not . sameColor brd color) $ targetSquares (Board brd bnds) (Piece ptype color sqr)
+
+check :: Board -> Piece -> Bool
+check brd (Piece King color sqr) = sqr `elem` targetedSquares brd color
 
 strSqr :: String -> Square
 strSqr (a:n:rs) = Square (fromEnum a - 64) (fromEnum n - 48)
@@ -142,8 +159,8 @@ strSqr (a:n:rs) = Square (fromEnum a - 64) (fromEnum n - 48)
 genBoard :: Bounds -> Board
 genBoard bnds = let whitePawns = [(Square x 2, Piece Pawn White (Square x 2)) | x <- [1..8]]
                     blackPawns = [(Square x 7, Piece Pawn Black (Square x 7)) | x <- [1..8]]
-                    knight = [(Square 5 4, Piece Knight White (Square 5 5))]
-                in Board (HMap.fromList (whitePawns ++ blackPawns ++ knight)) bnds
+                    queen = [(Square 2 5, Piece Queen White (Square 2 5))]
+                in Board (HMap.fromList (whitePawns ++ blackPawns ++ queen)) bnds
 
 moves :: Board -> Square -> [Square]
 moves brd sqr = case lookupS brd sqr of Nothing -> []
