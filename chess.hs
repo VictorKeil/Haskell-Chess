@@ -136,13 +136,25 @@ targetSquares (Board brd bnds) (Piece King color (Square col row)) =
 fArgPair :: (a -> b) -> a -> (b, a)
 fArgPair f x = (f x, x)
 
-targetedSquares :: Board -> Color -> [([Square], Piece)]
-targetedSquares (Board brd bnds) color =
-  let enemySqrs :: [(Square, Piece)]
-      enemySqrs = filter (not . sameColor brd color . fst) $ HMap.toList brd
-      targetedBy :: [([Square], Piece)]
-      targetedBy = map (fArgPair (targetSquares (Board brd bnds)) . snd) enemySqrs
-  in targetedBy
+width :: Bounds -> Int
+width (Bounds minX _ maxX _) = maxX - minX + 1
+
+height :: Bounds -> Int
+height (Bounds _ minY _ maxY) = maxY - minY + 1
+
+targeters :: Board -> Color -> Square -> [Square]
+targeters brd color sqr =
+  let pieces = [Piece t color sqr | t <- [minBound..maxBound::PieceType]]
+      pieceTargets :: [([Square], Piece)]
+      pieceTargets = map (fArgPair $ targetSquares brd) pieces
+  in concat $ map occupiedBy pieceTargets
+  where occupiedBy (sqrs, pc) = filter (isEnemyOf pc) sqrs
+          where isEnemyOf (Piece t c _) sqr' = case lookupS brd sqr' of
+                                                 Nothing -> False
+                                                 Just (Piece t' c' _) -> (t == t') && (c /= c')
+      
+targeted :: Board -> Color -> Square -> Bool
+targeted brd color sqr = not . null $ targeters brd color sqr
 
 validMoves :: Board -> Piece -> [Square]
 validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
@@ -160,27 +172,23 @@ validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
 validMoves (Board brd bnds) (Piece King color sqr) =
   let tgtSqrs = targetSquares (Board brd bnds) (Piece King color sqr)
       diffColor = filter (not . sameColor brd color) $ tgtSqrs
-  in filter (not . ((flip elem) $ concat $ map fst $ targetedSquares (Board brd bnds) color)) diffColor
+  in filter (not . targeted (Board brd bnds) color) diffColor
   
 validMoves (Board brd bnds) (Piece ptype color sqr) =
   filter (not . sameColor brd color) $ targetSquares (Board brd bnds) (Piece ptype color sqr)
 
 checks :: Board -> Piece -> [Square]
-checks brd (Piece King color sqr) =
-  let checks = filter ((sqr `elem`) . fst) $ targetedSquares brd color 
-  in map ((\(Piece _ _ sqr) -> sqr) . snd) checks
+checks brd (Piece King color sqr) = targeters brd color sqr
 
 checkMate :: Board -> Piece -> Bool
 checkMate brd (Piece King color sqr) =
   let kingCanMove = not . null $ validMoves brd (Piece King color sqr)
       checks' = checks brd (Piece King color sqr)
-      friendlyTargets = if null checks'
-                        then []
-                        else case lookupS brd (head checks') of
-                               Nothing -> []
-                               Just (Piece _ checkColor _) ->
-                                 concat $ map fst $ targetedSquares brd checkColor
-      canKillCheck = length (friendlyTargets \\ checks') == 1
+      attackedChecks = if null checks' then []
+                       else case lookupS brd (head checks') of
+                              Nothing -> []
+                              Just (Piece _ color' sqr') -> concat $ map (targeters brd color') checks'
+      canKillCheck = length attackedChecks == 1
   in not . or $ [null checks', kingCanMove, canKillCheck]
 
 strSqr :: String -> Square

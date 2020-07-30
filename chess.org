@@ -1,0 +1,9 @@
+#+TITLE: Haskell chess
+
+* Refactors
+** Use targeters instead of targetedSquares
+*** Needed refactors [2/3]
+- [X] validMoves
+- [X] checks
+- [ ] checkMate
+
