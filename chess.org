@@ -1,9 +1,11 @@
 #+TITLE: Haskell chess
 
+* Issues [0/1]
+- [ ] King can target squares which are attacked
 * Refactors
 ** Use targeters instead of targetedSquares
-*** Needed refactors [2/3]
+*** Needed refactors [3/3]
 - [X] validMoves
 - [X] checks
-- [ ] checkMate
+- [X] checkMate
 
