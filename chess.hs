@@ -165,7 +165,7 @@ targeted brd color sqr = not . null $ targeters targetSquares brd color sqr
 
 validMoves :: Board -> Piece -> [Square]
 validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
-  let (direction, initRow, promoteRow) = if color == White then (1,2) else (-1,7)
+  let (direction, initRow) = if color == White then (1,2) else (-1,7)
       baseSquares =
         if row == initRow
         then [Square col (row + direction * x) | x <- [1..2]]
