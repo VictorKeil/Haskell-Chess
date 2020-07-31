@@ -14,9 +14,9 @@ instance Hashable Square where
   hash (Square col row) = col + row * 8
   hashWithSalt _ sqr = hash sqr
 
-data Color = Black | White deriving (Show, Eq)
+data Color = Black | White deriving (Show, Eq, Enum, Bounded)
 
-data PieceType = King | Queen | Pawn | Rook | Bishop | Knight deriving (Eq, Show, Enum, Bounded)
+data PieceType = King | Queen | Pawn | Rook | Bishop | Knight deriving (Eq, Show, Enum, Bounded, Read)
 
 data Piece = Piece PieceType Color Square deriving (Show)
 
@@ -75,7 +75,9 @@ instance Show Board where
   show brd = showSquares brd []
 
 printSquares :: Board -> [Square] -> IO ()
-printSquares brd sqrs = do putStrLn $ showSquares brd sqrs
+printSquares brd sqrs = do
+  ANSI.clearScreen
+  putStrLn $ showSquares brd sqrs
 
 sameColor :: BoardMap -> Color -> Square -> Bool
 sameColor brd col1 sqr = case HMap.lookup sqr brd of
@@ -163,7 +165,7 @@ targeted brd color sqr = not . null $ targeters targetSquares brd color sqr
 
 validMoves :: Board -> Piece -> [Square]
 validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
-  let (direction, initRow) = if color == White then (1,2) else (-1, 7)
+  let (direction, initRow, promoteRow) = if color == White then (1,2) else (-1,7)
       baseSquares =
         if row == initRow
         then [Square col (row + direction * x) | x <- [1..2]]
@@ -182,9 +184,6 @@ validMoves (Board brd bnds) (Piece King color sqr) =
 validMoves (Board brd bnds) (Piece ptype color sqr) =
   filter (not . sameColor brd color) $ targetSquares (Board brd bnds) (Piece ptype color sqr)
 
-checks :: Board -> Piece -> [Square]
-checks brd (Piece King color sqr) = targeters validMoves brd color sqr
-
 coloredPieces :: Board -> Color -> [Piece]
 coloredPieces (Board brd _) color =
   map snd $ filter ((\(Piece _ color' _) -> color' == color) . snd) $ HMap.toList brd
@@ -193,19 +192,33 @@ coloredPieces (Board brd _) color =
 coloredSquares :: Board -> Color -> [Square]
 coloredSquares brd color = map (\(Piece _ _ sqr) -> sqr) $ coloredPieces brd color
 
+king :: Board -> Color -> Maybe Piece
+king brd colr = find (\(Piece t _ _) -> t == King) $ coloredPieces brd colr
+
+checks :: Board -> Color -> [Square]
+checks brd colr = 
+  case king brd colr of
+    Nothing -> []
+    Just (Piece _ _ sqr) -> targeters targetSquares brd colr sqr
+
 checkMate :: Board -> Color -> Bool
-checkMate brd color =
-  case find (\(Piece t _ _) -> t == King) $ coloredPieces brd color of
+checkMate brd colr =
+  case king brd colr of
     Nothing -> False
-    Just king ->
-      let kingCanMove = not . null $ validMoves brd king
-          checks' = checks brd king
+    Just k ->
+      let kCanMove = not . null $ validMoves brd k
+          checks' = checks brd colr
           checkAttackers = if null checks' then []
                            else case lookupS brd (head checks') of
                                   Nothing -> []
                                   Just (Piece _ color' _) -> map (targeters validMoves brd color') checks'
           canKillCheck = 1 == (length . filter (not . null) $ checkAttackers)
-      in not . or $ [null checks', kingCanMove, canKillCheck]
+      in not . or $ [null checks', kCanMove, canKillCheck]
+
+lookupS' :: Board -> Square -> Piece
+lookupS' brd sqr = case lookupS brd sqr of
+                     Nothing -> error ("The square '" ++ show sqr ++ "' does not contain a piece.")
+                     Just sqr -> sqr
 
 strSqr :: String -> Square
 strSqr (a:n:rs) = Square (fromEnum (toUpper a) - 64) (fromEnum n - 48)
@@ -227,21 +240,6 @@ removePiece (Board brd bnds) (Piece _ _ sqr) =
 
 printMoves :: Board -> Piece -> IO ()
 printMoves brd pc = printSquares (insertPiece brd pc) $ validMoves brd pc
-
-testBounds :: Piece -> [Square]
-testBounds pc = let (Board _ bnds) = emptyBoard
-                    ts = targetSquares emptyBoard pc
-                    vm = validMoves emptyBoard pc
-                in (ts \\ restrictToBounds bnds ts) ++ (vm \\ restrictToBounds bnds vm)
-
-testPieces :: [Piece]
-testPieces = nubBy (\(Piece t1 _ _) (Piece t2 _ _) -> t1 == t2) $ concat
-  $ testP [Piece t b s | t <- [minBound .. maxBound::PieceType]
-                       , b <- [Black]
-                       , s <- [Square col row | col <- [1..8], row <- [1..8]]]
-  where testP [] = [] 
-        testP (p:ps) = (if null (testBounds p) then [] else [p] ):(testP ps)
-          
 
 board = foldr (flip insertPiece) emptyBoard pieces
   where pieces = let whitePRow = 2
@@ -267,40 +265,85 @@ move brd sqr1 sqr2 = case lookupS brd sqr1 of
                  Just (Piece t c _) ->
                    insertPiece (removePiece brd (Piece t c sqr1)) (Piece t c sqr2)
 
-infoString = "Type in mv to make a move."
-
 safeSquare :: [Square] -> String -> Maybe Square
 safeSquare bnds [a,n] = let sqr = strSqr [a,n]
                         in if elem sqr bnds then Just sqr else Nothing
 safeSquare _ _ = Nothing
 
-squareSelect :: String -> [Square] -> IO Square
+squareSelect :: String -> [Square] -> IO (Maybe Square)
 squareSelect msg bnds = do
   putStr msg
   sqr <- getLine
-  case safeSquare bnds sqr of
-    Nothing -> do putStrLn "Not a valid square, try again."
-                  squareSelect msg bnds
-    Just sqr -> return sqr
+  case sqr of
+    "cancel" -> return Nothing
+    sqr -> case safeSquare bnds sqr of
+             Nothing -> do putStrLn "Not a valid square, try again."
+                           squareSelect msg bnds
+             Just sqr -> return (Just sqr)
 
-lookupS' :: Board -> Square -> Piece
-lookupS' brd sqr = case lookupS brd sqr of
-                     Nothing -> error ("The square '" ++ show sqr ++ "' does not contain a piece.")
-                     Just sqr -> sqr
+cycleEnumSucc :: (Eq a, Enum a, Bounded a) => a -> a
+cycleEnumSucc e = if e == maxBound then minBound else succ e
 
-play :: Board -> IO Board
-play brd = do
-  let squares = coloredSquares brd White
-      checkMateB = if checkMate brd Black then "Black" else ""
-      checkMateW = if checkMate brd White then "White" else ""
-  if not . null $ (checkMateB ++ checkMateW)
-    then putStrLn ("Check mate: " ++ checkMateB ++ checkMateW)
-    else return ()
-  putStr $ show brd
-  sqr1 <- squareSelect "Enter square to move: " squares
-  putStr $ showSquaresWith brd '.' [sqr1]
-  sqr2 <- squareSelect "Enter destination square: " $ validMoves brd $ lookupS' brd sqr1
-  play $ move brd sqr1 sqr2
+cycleEnumPred :: (Eq a, Enum a, Bounded a) => a -> a
+cycleEnumPred e = if e == minBound then maxBound else pred e
 
-main = play board
+data Game = Game Board Color
+instance Show Game where
+  show (Game _ trn) = "Game - Turn: " ++ show trn
+
+printGame :: Game -> IO ()
+printGame (Game brd trn) = do
+  printSquares brd []
+  putStrLn ("Turn: " ++ show trn)
+
+pawnPromote :: Board -> Square -> Maybe Color
+pawnPromote brd sqr = case lookupS' brd sqr of
+                        (Piece Pawn White (Square _ row)) ->
+                          if row == 8 then Just White else Nothing
+                        (Piece Pawn Black (Square _ row)) ->
+                          if row == 1 then Just Black else Nothing
+                        _ -> Nothing
+
+promoPieces = [Queen, Rook, Bishop, Knight]
+
+getPromo :: IO PieceType
+getPromo = do
+  putStr "Promote to: "
+  i:nput <- getLine
+  if ((toUpper i):(map toLower nput)) `elem` map show promoPieces
+    then return $ read $ (toUpper i):(map toLower nput)
+    else do
+    let pieceList = unlines . map show $ promoPieces
+    putStrLn ("Piece must be one of the following:\n" ++ pieceList ++ "Try again.")
+    getPromo
+
+promoteMaybe :: Board -> Square -> IO Board
+promoteMaybe brd sqr =
+  case pawnPromote brd sqr of
+    Just colr -> do
+      t <- getPromo
+      return $ insertPiece brd $ Piece t colr sqr
+    Nothing -> return brd
+
+play :: Game -> IO Game
+play (Game brd trn) = do
+  if checkMate brd trn
+    then do
+    putStrLn $ show (cycleEnumPred trn) ++ " wins."
+    play (Game board White)
+    else do
+    printGame (Game brd trn)
+    sqr1 <- squareSelect "Enter square to move: " $ coloredSquares brd trn
+    case sqr1 of
+      Nothing -> play (Game brd trn)
+      Just s1 -> do
+        putStr $ showSquaresWith brd '.' [s1]
+        sqr2 <- squareSelect "Enter destination square: " $ validMoves brd $ lookupS' brd s1
+        case sqr2 of
+          Nothing -> play (Game brd trn)
+          Just s2 -> do
+            newBrd <- promoteMaybe (move brd s1 s2) s2
+            play $ Game newBrd (cycleEnumSucc trn)
+
+main = play (Game board White)
   
