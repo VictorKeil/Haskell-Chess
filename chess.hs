@@ -1,3 +1,6 @@
+module Chess where
+
+import Data.Maybe
 import Data.List.Index
 import qualified System.Console.ANSI as ANSI
 import Data.Char
@@ -19,7 +22,7 @@ data Color = Black | White deriving (Show, Eq, Enum, Bounded)
 
 data PieceType = King | Queen | Pawn | Rook | Bishop | Knight deriving (Eq, Show, Enum, Bounded, Read)
 
-data Piece = Piece PieceType Color Square deriving (Show)
+data Piece = Piece PieceType Color Square Square deriving (Show)
 
 data Bounds = Bounds {minX :: Int, minY :: Int, maxX :: Int, maxY :: Int} deriving (Show)
 width :: Bounds -> Int
@@ -29,11 +32,11 @@ height :: Bounds -> Int
 height (Bounds _ minY _ maxY) = maxY - minY + 1
 
 square :: Piece -> Square
-square (Piece _ _ sqr) = sqr
+square (Piece _ _ sqr _) = sqr
 
 pieceSym :: Piece -> Char
-pieceSym (Piece Knight _ _) = 'N'
-pieceSym (Piece kind _ _) = head $ show kind
+pieceSym (Piece Knight _ _ _) = 'N'
+pieceSym (Piece kind _ _ _) = head $ show kind
 
 type BoardMap = HMap.Map Square Piece
 
@@ -86,7 +89,7 @@ printBoard brd = putStrLn $ showBoard brd
 sameColor :: BoardMap -> Color -> Square -> Bool
 sameColor brd col1 sqr = case HMap.lookup sqr brd of
                           Nothing -> False
-                          Just (Piece _ col2 _) -> col1 == col2
+                          Just (Piece _ col2 _ _) -> col1 == col2
 
 nullSquare :: (HMap.Map Square Piece) -> Square -> Bool
 nullSquare brd = null . (flip HMap.lookup $ brd)
@@ -106,19 +109,19 @@ restrictToBounds (Bounds minX minY maxX maxY) ss = filter inBounds ss
           (col `elem` [minX .. maxX]) && (row `elem` [minY .. maxY])
 
 targetSquares :: Board -> Piece -> [Square]
-targetSquares (Board brd bnds) (Piece Pawn color (Square col row)) =
+targetSquares (Board brd bnds) (Piece Pawn color (Square col row) _) =
   let (direction, initRow) = if color == White then (1,2) else (-1, 7)
   in restrictToBounds bnds
      $ [Square (col - 1) (row + direction), Square (col + 1) (row + direction)]
   
-targetSquares (Board brd bnds) (Piece Rook color (Square col row)) =
+targetSquares (Board brd bnds) (Piece Rook color (Square col row) _) =
   let posX = [Square (col + x) row | x <- [1..maxX bnds - col]]
       negX = [Square (col - x) row | x <- [1..col - minX bnds]]
       posY = [Square col (row + y) | y <- [1..maxY bnds - row]]
       negY = [Square col (row - y) | y <- [1..row - minY bnds]]
   in concat $ map (takeLong brd) $ [negX, posX, negY, posY]
 
-targetSquares (Board brd bnds) (Piece Bishop color (Square col row)) =
+targetSquares (Board brd bnds) (Piece Bishop color (Square col row) _) =
   let maxNorth = maxY bnds - row
       maxSouth = row - minY bnds
       maxWest = col - minX bnds
@@ -130,15 +133,15 @@ targetSquares (Board brd bnds) (Piece Bishop color (Square col row)) =
       nw = [Square (col - x) (row + x) | x <- [1 .. min maxNorth maxWest]]
   in concat $ map (takeLong brd) $ [ne, se, sw, nw]
 
-targetSquares (Board brd bnds) (Piece Knight color (Square col row)) =
+targetSquares (Board brd bnds) (Piece Knight color (Square col row) _) =
   let set1 = [Square (col + x) (row + y) | x <- [-1, 1], y <- [-2, 2]]
       set2 = [Square (col + x) (row + y) | x <- [-2, 2], y <- [-1,1]]
   in restrictToBounds bnds $ set1 ++ set2
 
-targetSquares brd (Piece Queen color sqr) =
-  concat $ map (targetSquares brd) [(Piece Rook color sqr), (Piece Bishop color sqr)]
+targetSquares brd (Piece Queen color sqr lSqr) =
+  concat $ map (targetSquares brd) [(Piece Rook color sqr lSqr), (Piece Bishop color sqr lSqr)]
 
-targetSquares (Board brd bnds) (Piece King color (Square col row)) =
+targetSquares (Board brd bnds) (Piece King color (Square col row) _) =
   let set1 = [Square (col + x) (row + y) | x <- [-1..1], y <- [-1,1]]
   in restrictToBounds bnds $ set1 ++ [Square (col + x) row | x <- [-1,1]]
 
@@ -149,20 +152,46 @@ fArgPair f x = (f x, x)
 
 targeters :: (Board -> Piece -> [Square]) -> Board -> Color -> Square -> [Square]
 targeters moveFunc brd color sqr =
-  let pieces = [Piece t color sqr | t <- [minBound..maxBound::PieceType]]
+  let pieces = [Piece t color sqr (Square 1 1) | t <- [minBound..maxBound::PieceType]]
+      -- Use the provided moveFunc to find all the squares that each pieceType targets. If an enemy
+      -- piece of the same type occupies a targeted square, it can capture on that square
       pieceTargets :: [([Square], Piece)]
       pieceTargets = map (fArgPair $ moveFunc brd) pieces
   in concat $ map occupiedBy pieceTargets
   where occupiedBy (sqrs, pc) = filter (isEnemyOf pc) sqrs
-          where isEnemyOf (Piece t c _) sqr' = case lookupS brd sqr' of
-                                                 Nothing -> False
-                                                 Just (Piece t' c' _) -> (t == t') && (c /= c')
+          where isEnemyOf (Piece t c _ _) sqr' = case lookupS brd sqr' of
+                                                   Nothing -> False
+                                                   Just (Piece t' c' _ _) -> (t == t') && (c /= c')
       
 targeted :: Board -> Color -> Square -> Bool
 targeted brd color sqr = not . null $ targeters targetSquares brd color sqr
 
+zipFilter :: [Bool] -> [a] -> [a]
+zipFilter [] _ = []
+zipFilter _ [] = []
+zipFilter (b:bs) (x:xs) = if b then x:(zipFilter bs xs) else zipFilter bs xs
+
+validCastles :: Board -> Piece -> [Square]
+validCastles brd@(Board _ bnds) k@(Piece King colr (Square col row) _) =
+  if moved (Just k)
+  then []
+  else let left = col - 2
+           right = col + 2
+           rookSqrs = [Square x row | x <- [minX bnds, maxX bnds]]
+           rooksMoved = map (moved . lookupS brd) rookSqrs
+           castleSqrs = [[Square x row | x <- [left .. col]]
+                           ,[Square x row | x <- [col .. right]]]
+           rookValid = zipFilter (map not rooksMoved) castleSqrs
+           canCastle = map (not . foldr (\s acc -> acc || targeted brd colr s) False) rookValid
+           
+       in zipFilter canCastle [Square left row, Square right row]
+           
+           
+  where moved (Just (Piece _ _ sqr lSqr)) = sqr /= lSqr
+        moved Nothing = True
+
 validMoves :: Board -> Piece -> [Square]
-validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
+validMoves (Board brd bnds) (Piece Pawn color (Square col row) lSqr) =
   let (direction, initRow) = if color == White then (1,2) else (-1,7)
       baseSquares =
         if row == initRow
@@ -170,34 +199,35 @@ validMoves (Board brd bnds) (Piece Pawn color (Square col row)) =
         else [Square col (row + direction)]
       baseMoves = takeWhile (nullSquare brd) baseSquares
       
-      tgtSqrs = targetSquares (Board brd bnds) (Piece Pawn color (Square col row))
+      tgtSqrs = targetSquares (Board brd bnds) (Piece Pawn color (Square col row) lSqr)
       validCaptures = filter (\s -> not (sameColor brd color s || nullSquare brd s)) tgtSqrs
   in restrictToBounds bnds $ validCaptures ++ baseMoves
 
-validMoves (Board brd bnds) (Piece King color sqr) =
-  let tgtSqrs = targetSquares (Board brd bnds) (Piece King color sqr)
+validMoves (Board brd bnds) (Piece King color sqr lSqr) =
+  let tgtSqrs = targetSquares (Board brd bnds) (Piece King color sqr lSqr)
+      castles = validCastles (Board brd bnds) (Piece King color sqr lSqr)
       diffColor = filter (not . sameColor brd color) $ tgtSqrs
-  in filter (not . targeted (Board brd bnds) color) diffColor
+  in castles ++ filter (not . targeted (Board brd bnds) color) diffColor
   
-validMoves (Board brd bnds) (Piece ptype color sqr) =
-  filter (not . sameColor brd color) $ targetSquares (Board brd bnds) (Piece ptype color sqr)
+validMoves (Board brd bnds) (Piece ptype color sqr lSqr) =
+  filter (not . sameColor brd color) $ targetSquares (Board brd bnds) (Piece ptype color sqr lSqr)
 
 coloredPieces :: Board -> Color -> [Piece]
 coloredPieces (Board brd _) color =
-  map snd $ filter ((\(Piece _ color' _) -> color' == color) . snd) $ HMap.toList brd
+  map snd $ filter ((\(Piece _ color' _ _) -> color' == color) . snd) $ HMap.toList brd
 
 
 coloredSquares :: Board -> Color -> [Square]
-coloredSquares brd color = map (\(Piece _ _ sqr) -> sqr) $ coloredPieces brd color
+coloredSquares brd color = map (\(Piece _ _ sqr _) -> sqr) $ coloredPieces brd color
 
 king :: Board -> Color -> Maybe Piece
-king brd colr = find (\(Piece t _ _) -> t == King) $ coloredPieces brd colr
+king brd colr = find (\(Piece t _ _ _) -> t == King) $ coloredPieces brd colr
 
 checks :: Board -> Color -> [Square]
 checks brd colr = 
   case king brd colr of
     Nothing -> []
-    Just (Piece _ _ sqr) -> targeters targetSquares brd colr sqr
+    Just (Piece _ _ sqr _) -> targeters targetSquares brd colr sqr
 
 checkMate :: Board -> Color -> Bool
 checkMate brd colr =
@@ -209,7 +239,7 @@ checkMate brd colr =
           checkAttackers = if null checks' then []
                            else case lookupS brd (head checks') of
                                   Nothing -> []
-                                  Just (Piece _ color' _) -> map (targeters validMoves brd color') checks'
+                                  Just (Piece _ color' _ _) -> map (targeters validMoves brd color') checks'
           canKillCheck = 1 == (length . filter (not . null) $ checkAttackers)
       in not . or $ [null checks', kCanMove, canKillCheck]
 
@@ -229,36 +259,51 @@ moves brd sqr = case lookupS brd sqr of Nothing -> []
                                         Just p -> validMoves brd p
 
 insertPiece :: Board -> Piece -> Board
-insertPiece (Board brd bnds) (Piece t c sqr) =
-  (Board (HMap.insert sqr (Piece t c sqr) brd) bnds)
+insertPiece (Board brd bnds) pc@(Piece t c sqr _) =
+  (Board (HMap.insert sqr pc brd) bnds)
 
 removePiece :: Board -> Piece -> Board
-removePiece (Board brd bnds) (Piece _ _ sqr) =
+removePiece (Board brd bnds) (Piece _ _ sqr _) =
   (Board (HMap.delete sqr brd) bnds)
 
 board = foldr (flip insertPiece) emptyBoard pieces
   where pieces = let whitePRow = 2
                      blackPRow = 7
-                     whitePawns = [Piece Pawn White (Square col whitePRow) | col <- [1..8]]
-                     blackPawns = [Piece Pawn Black (Square col blackPRow) | col <- [1..8]]
-                     whiteRooks = [Piece Rook White (Square col 1) | col <- [1,8]]
-                     blackRooks = [Piece Rook Black (Square col 8) | col <- [1,8]]
-                     whiteKnights = [Piece Knight White (Square col 1) | col <- [2,7]]
-                     blackKnights = [Piece Knight Black (Square col 8) | col <- [2,7]]
-                     whiteBishops = [Piece Bishop White (Square col 1) | col <- [3, 6]]
-                     blackBishops = [Piece Bishop Black (Square col 8) | col <- [3, 6]]
-                     whiteQueen = [Piece Queen White (Square 4 1)]
-                     blackQueen = [Piece Queen Black (Square 4 8)]
-                     whiteKing = [Piece King White (Square 5 1)]
-                     blackKing = [Piece King Black (Square 5 8)]
+                     whitePawns = [Piece Pawn White (Square col whitePRow) (Square col whitePRow) | col <- [1..8]]
+                     blackPawns = [Piece Pawn Black (Square col blackPRow) (Square col blackPRow) | col <- [1..8]]
+                     whiteRooks = [Piece Rook White (Square col 1) (Square col 1) | col <- [1,8]]
+                     blackRooks = [Piece Rook Black (Square col 8) (Square col 8) | col <- [1,8]]
+                     whiteKnights = [Piece Knight White (Square col 1) (Square col 1) | col <- [2,7]]
+                     blackKnights = [Piece Knight Black (Square col 8) (Square col 8) | col <- [2,7]]
+                     whiteBishops = [Piece Bishop White (Square col 1) (Square col 1) | col <- [3, 6]]
+                     blackBishops = [Piece Bishop Black (Square col 8) (Square col 8) | col <- [3, 6]]
+                     whiteQueen = [Piece Queen White (Square 4 1) (Square 4 1)]
+                     blackQueen = [Piece Queen Black (Square 4 8) (Square 4 8)]
+                     whiteKing = [Piece King White (Square 5 1) (Square 5 1)]
+                     blackKing = [Piece King Black (Square 5 8) (Square 5 8)]
           in (whitePawns ++ whiteRooks ++ whiteKnights ++ whiteBishops ++ whiteQueen ++ whiteKing)
           ++ (blackPawns ++ blackRooks ++ blackKnights ++ blackBishops ++ blackQueen ++ blackKing)
 
-move :: Board -> Square -> Square -> Board
-move brd sqr1 sqr2 = case lookupS brd sqr1 of
-                 Nothing -> brd
-                 Just (Piece t c _) ->
-                   insertPiece (removePiece brd (Piece t c sqr1)) (Piece t c sqr2)
+move :: Board -> Piece -> Square -> Board
+move brd pc@(Piece t c sqr1 _) sqr2 = insertPiece (removePiece brd pc) (Piece t c sqr2 sqr1)
+
+handleMove :: Board -> Square -> Square -> Board
+handleMove brd sqr1@(Square col1 _) sqr2@(Square col2 _) =
+  case lookupS brd sqr1 of
+    Nothing -> brd
+    Just pc@(Piece King _ _ _) ->
+      let dx = abs (col1 - col2)
+      in if dx > 1
+         then castle brd pc sqr2
+         else move brd pc sqr2
+    Just pc -> move brd pc sqr2
+  where castle brd@(Board _ bnds) kng@(Piece King _ (Square col1 row) _) (Square col2 _) =
+          let rookCol1 = if col2 > col1 then maxX bnds else minX bnds
+              rookCol2 = col2 + signum (col1 - col2)
+              rookSqr1 = Square rookCol1 row
+              rookSqr2 = Square rookCol2 row
+          in handleMove (move brd kng (Square col2 row)) rookSqr1 rookSqr2
+            
 
 safeSquare :: [Square] -> String -> Maybe Square
 safeSquare bnds [a,n] = let sqr = strSqr [a,n]
@@ -292,11 +337,11 @@ printGame (Game brd trn) = do
   putStrLn ("Turn: " ++ show trn)
 
 pawnPromote :: Board -> Square -> Maybe Color
-pawnPromote brd sqr = case lookupS' brd sqr of
-                        (Piece Pawn White (Square _ row)) ->
-                          if row == 8 then Just White else Nothing
-                        (Piece Pawn Black (Square _ row)) ->
-                          if row == 1 then Just Black else Nothing
+pawnPromote brd@(Board _ bnds) sqr = case lookupS' brd sqr of
+                        (Piece Pawn White (Square _ row) _) ->
+                          if row == maxY bnds then Just White else Nothing
+                        (Piece Pawn Black (Square _ row) _) ->
+                          if row == minY bnds then Just Black else Nothing
                         _ -> Nothing
 
 promoPieces = [Queen, Rook, Bishop, Knight]
@@ -317,7 +362,7 @@ promoteMaybe brd sqr =
   case pawnPromote brd sqr of
     Just colr -> do
       t <- getPromo
-      return $ insertPiece brd $ Piece t colr sqr
+      return $ insertPiece brd $ Piece t colr sqr sqr
     Nothing -> return brd
 
 type Move = (Square, Square)
@@ -345,7 +390,7 @@ play game@(Game brd trn) = do
     case mv of
       Nothing -> play game
       Just (s1, s2) -> do
-        newBrd <- promoteMaybe (move brd s1 s2) s2
+        newBrd <- promoteMaybe (handleMove brd s1 s2) s2
         play $ Game newBrd (cycleEnumSucc trn)
 
 main = play (Game board White)
