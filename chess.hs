@@ -1,3 +1,4 @@
+import Data.List.Index
 import qualified System.Console.ANSI as ANSI
 import Data.Char
 import Data.Tuple
@@ -21,6 +22,11 @@ data PieceType = King | Queen | Pawn | Rook | Bishop | Knight deriving (Eq, Show
 data Piece = Piece PieceType Color Square deriving (Show)
 
 data Bounds = Bounds {minX :: Int, minY :: Int, maxX :: Int, maxY :: Int} deriving (Show)
+width :: Bounds -> Int
+width (Bounds minX _ maxX _) = maxX - minX + 1
+
+height :: Bounds -> Int
+height (Bounds _ minY _ maxY) = maxY - minY + 1
 
 square :: Piece -> Square
 square (Piece _ _ sqr) = sqr
@@ -36,48 +42,46 @@ data Board = Board BoardMap Bounds
 lookupS :: Board -> Square -> Maybe Piece
 lookupS (Board brd _) sqr = HMap.lookup sqr brd
 
-showSquaresWith :: Board -> Char -> [Square] -> String
-showSquaresWith (Board brd (Bounds minX minY maxX maxY)) showChar sqrs =
-  let width = maxX - minX + 1
-      height = maxY - minY + 1
+modBoard :: Char -> Square -> [String] -> [String]
+modBoard c sqrs strs = reverse . imap (rowMapper c sqrs) $ reverse strs
+  where rowMapper c sqrs row str = imap (colMapper c sqrs row) str
+          where colMapper newC sqrs row col oldC =
+                  if (Square (col + 1) (row + 1)) == sqrs
+                  then newC else oldC
 
-      -- Make row and column coordinate axes
-      cols = [toEnum (x + 64) :: Char | x <- [1 .. width]]
-      rows = [head . show $ x | x <- [height, height - 1 .. 1]]
+showPieces :: Board -> [String]
+showPieces (Board brd bnds) =
+  let textSquares =
+        [[if odd (x+y) then ' ' else '#' | x <- [1 .. width bnds]] | y <- [1 .. height bnds]]
+  in foldr (\p acc -> modBoard (pieceSym . snd $ p) (fst p) acc) textSquares $ HMap.toList brd
+  
 
-      -- Generate a list of strings that alternate between '.' and '#'
-      -- Each string represents a row on the chess board
-      textSquares =
-        [[if odd (x+y) then ' ' else '#' | x <- [1 .. width]] | y <- [1 .. height]]
+markSquaresWith :: Board -> Char -> [Square] -> [String]
+markSquaresWith (Board brd bnds) mark sqrs = foldr (modBoard mark) (showPieces (Board brd bnds)) sqrs
 
-      -- Generate a list with similar structure as the one above, but fill it with
-      -- corresponding Square objects
-      squares = reverse [[(Square x y) | x <- [1 .. width]] | y <- [1 .. height]]
-      -- Zip the previous two lists together to create a list of list of pairs of
-      -- empty square characters and Square objects
-      textSqrPairs = zipWith zip textSquares squares
-      -- Map through each sublist, look for a piece on the board on each square.
-      -- If a piece is found, replace that character with the pieceSym of the piece.
-      -- If a piece is not found, simply return the empty square character of that square.
-      filledBoard =
-        (flip map) textSqrPairs $ map (\pair -> if (snd pair) `elem` sqrs
-                                                then showChar
-                                                else case HMap.lookup (snd pair) brd of
-                                                       Nothing -> fst pair
-                                                       Just piece -> pieceSym piece)
-      axesBoard = (transpose $ rows:(replicate 8 ' '):(transpose filledBoard))
-  in unlines $ (map (intersperse '|') axesBoard) ++ [(replicate 10 ' '), "    " ++ intersperse '|' cols]
+markSquares :: Board -> [Square] -> [String]
+markSquares brd = markSquaresWith brd 'X'
 
-showSquares :: Board -> [Square] -> String
-showSquares brd = showSquaresWith brd 'X'
+showBoard :: [String] -> String
+showBoard brd =
+  let cols = [toEnum (x + 64) :: Char | x <- [1 .. length . head $ brd]]
+      rows = [head . show $ x | x <- [length brd, length brd - 1 .. 1]]
+      withAxes = (transpose $ rows:(replicate 8 ' '):(transpose brd))
+  in unlines $ (map (intersperse '|') withAxes) ++ [(replicate 10 ' '), "    " ++ intersperse '|' cols]
+
+showBoardFlipped :: [String] -> String
+showBoardFlipped brd =
+  let cols = reverse [toEnum (x + 64) :: Char | x <- [1 .. length . head $ brd]]
+      rows = [head . show $ x | x <- [1 .. length brd]]
+      flipped = reverse . map reverse $ brd
+      withAxes = (transpose $ rows:(replicate 8 ' '):(transpose flipped))
+  in unlines $ (map (intersperse '|') withAxes) ++ [(replicate 10 ' '), "    " ++ intersperse '|' cols]
 
 instance Show Board where
-  show brd = showSquares brd []
+  show brd = showBoard $ showPieces brd
 
-printSquares :: Board -> [Square] -> IO ()
-printSquares brd sqrs = do
-  ANSI.clearScreen
-  putStrLn $ showSquares brd sqrs
+printBoard :: [String] -> IO ()
+printBoard brd = putStrLn $ showBoard brd
 
 sameColor :: BoardMap -> Color -> Square -> Bool
 sameColor brd col1 sqr = case HMap.lookup sqr brd of
@@ -142,12 +146,6 @@ targetSquares (Board brd bnds) (Piece King color (Square col row)) =
 -- the result and the argument in a pair
 fArgPair :: (a -> b) -> a -> (b, a)
 fArgPair f x = (f x, x)
-
-width :: Bounds -> Int
-width (Bounds minX _ maxX _) = maxX - minX + 1
-
-height :: Bounds -> Int
-height (Bounds _ minY _ maxY) = maxY - minY + 1
 
 targeters :: (Board -> Piece -> [Square]) -> Board -> Color -> Square -> [Square]
 targeters moveFunc brd color sqr =
@@ -238,9 +236,6 @@ removePiece :: Board -> Piece -> Board
 removePiece (Board brd bnds) (Piece _ _ sqr) =
   (Board (HMap.delete sqr brd) bnds)
 
-printMoves :: Board -> Piece -> IO ()
-printMoves brd pc = printSquares (insertPiece brd pc) $ validMoves brd pc
-
 board = foldr (flip insertPiece) emptyBoard pieces
   where pieces = let whitePRow = 2
                      blackPRow = 7
@@ -293,7 +288,7 @@ instance Show Game where
 
 printGame :: Game -> IO ()
 printGame (Game brd trn) = do
-  printSquares brd []
+  printBoard $ showPieces brd
   putStrLn ("Turn: " ++ show trn)
 
 pawnPromote :: Board -> Square -> Maybe Color
@@ -325,25 +320,33 @@ promoteMaybe brd sqr =
       return $ insertPiece brd $ Piece t colr sqr
     Nothing -> return brd
 
+type Move = (Square, Square)
+
+getMove :: Game -> IO (Maybe Move)
+getMove (Game brd trn) = do
+  sqr1 <- squareSelect "Enter square to move: " $ coloredSquares brd trn
+  case sqr1 of
+    Nothing -> return Nothing
+    Just s1 -> do
+      sqr2 <- squareSelect "Enter destination square: " $ validMoves brd $ lookupS' brd s1
+      case sqr2 of
+        Nothing -> return Nothing
+        Just s2 -> return $ Just (s1, s2)
+
 play :: Game -> IO Game
-play (Game brd trn) = do
+play game@(Game brd trn) = do
   if checkMate brd trn
     then do
     putStrLn $ show (cycleEnumPred trn) ++ " wins."
     play (Game board White)
     else do
-    printGame (Game brd trn)
-    sqr1 <- squareSelect "Enter square to move: " $ coloredSquares brd trn
-    case sqr1 of
-      Nothing -> play (Game brd trn)
-      Just s1 -> do
-        putStr $ showSquaresWith brd '.' [s1]
-        sqr2 <- squareSelect "Enter destination square: " $ validMoves brd $ lookupS' brd s1
-        case sqr2 of
-          Nothing -> play (Game brd trn)
-          Just s2 -> do
-            newBrd <- promoteMaybe (move brd s1 s2) s2
-            play $ Game newBrd (cycleEnumSucc trn)
+    printGame game
+    mv <- getMove game 
+    case mv of
+      Nothing -> play game
+      Just (s1, s2) -> do
+        newBrd <- promoteMaybe (move brd s1 s2) s2
+        play $ Game newBrd (cycleEnumSucc trn)
 
 main = play (Game board White)
   
