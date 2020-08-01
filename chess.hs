@@ -166,6 +166,21 @@ targeters moveFunc brd color sqr =
 targeted :: Board -> Color -> Square -> Bool
 targeted brd color sqr = not . null $ targeters targetSquares brd color sqr
 
+king :: Board -> Color -> Maybe Piece
+king brd colr = find (\(Piece t _ _ _) -> t == King) $ coloredPieces brd colr
+
+checks :: Board -> Color -> [Square]
+checks brd colr = 
+  case king brd colr of
+    Nothing -> []
+    Just (Piece _ _ sqr _) -> targeters targetSquares brd colr sqr
+
+check :: Board -> Color -> Bool
+check brd colr = not . null $ checks brd colr
+
+move :: Board -> Piece -> Square -> Board
+move brd pc@(Piece t c sqr1 _) sqr2 = insertPiece (removePiece brd pc) (Piece t c sqr2 sqr1)
+
 zipFilter :: [Bool] -> [a] -> [a]
 zipFilter [] _ = []
 zipFilter _ [] = []
@@ -191,7 +206,7 @@ validCastles brd@(Board _ bnds) k@(Piece King colr (Square col row) _) =
         moved Nothing = True
 
 validMoves :: Board -> Piece -> [Square]
-validMoves (Board brd bnds) (Piece Pawn color (Square col row) lSqr) =
+validMoves (Board brd bnds) pc@(Piece Pawn color (Square col row) lSqr) =
   let (direction, initRow) = if color == White then (1,2) else (-1,7)
       baseSquares =
         if row == initRow
@@ -201,7 +216,8 @@ validMoves (Board brd bnds) (Piece Pawn color (Square col row) lSqr) =
       
       tgtSqrs = targetSquares (Board brd bnds) (Piece Pawn color (Square col row) lSqr)
       validCaptures = filter (\s -> not (sameColor brd color s || nullSquare brd s)) tgtSqrs
-  in restrictToBounds bnds $ validCaptures ++ baseMoves
+      preCheck = restrictToBounds bnds $ validCaptures ++ baseMoves
+  in filter (\s -> not $ check (move (Board brd bnds) pc s) color) preCheck
 
 validMoves (Board brd bnds) (Piece King color sqr lSqr) =
   let tgtSqrs = targetSquares (Board brd bnds) (Piece King color sqr lSqr)
@@ -209,25 +225,16 @@ validMoves (Board brd bnds) (Piece King color sqr lSqr) =
       diffColor = filter (not . sameColor brd color) $ tgtSqrs
   in castles ++ filter (not . targeted (Board brd bnds) color) diffColor
   
-validMoves (Board brd bnds) (Piece ptype color sqr lSqr) =
-  filter (not . sameColor brd color) $ targetSquares (Board brd bnds) (Piece ptype color sqr lSqr)
+validMoves brd@(Board brdMap bnds) pc@(Piece ptype colr sqr lSqr) =
+  let preCheck = filter (not . sameColor brdMap colr) $ targetSquares brd pc
+  in filter (\s -> not $ check (move brd pc s) colr) preCheck
 
 coloredPieces :: Board -> Color -> [Piece]
 coloredPieces (Board brd _) color =
   map snd $ filter ((\(Piece _ color' _ _) -> color' == color) . snd) $ HMap.toList brd
 
-
 coloredSquares :: Board -> Color -> [Square]
 coloredSquares brd color = map (\(Piece _ _ sqr _) -> sqr) $ coloredPieces brd color
-
-king :: Board -> Color -> Maybe Piece
-king brd colr = find (\(Piece t _ _ _) -> t == King) $ coloredPieces brd colr
-
-checks :: Board -> Color -> [Square]
-checks brd colr = 
-  case king brd colr of
-    Nothing -> []
-    Just (Piece _ _ sqr _) -> targeters targetSquares brd colr sqr
 
 checkMate :: Board -> Color -> Bool
 checkMate brd colr =
@@ -284,42 +291,10 @@ board = foldr (flip insertPiece) emptyBoard pieces
           in (whitePawns ++ whiteRooks ++ whiteKnights ++ whiteBishops ++ whiteQueen ++ whiteKing)
           ++ (blackPawns ++ blackRooks ++ blackKnights ++ blackBishops ++ blackQueen ++ blackKing)
 
-move :: Board -> Piece -> Square -> Board
-move brd pc@(Piece t c sqr1 _) sqr2 = insertPiece (removePiece brd pc) (Piece t c sqr2 sqr1)
-
-handleMove :: Board -> Square -> Square -> Board
-handleMove brd sqr1@(Square col1 _) sqr2@(Square col2 _) =
-  case lookupS brd sqr1 of
-    Nothing -> brd
-    Just pc@(Piece King _ _ _) ->
-      let dx = abs (col1 - col2)
-      in if dx > 1
-         then castle brd pc sqr2
-         else move brd pc sqr2
-    Just pc -> move brd pc sqr2
-  where castle brd@(Board _ bnds) kng@(Piece King _ (Square col1 row) _) (Square col2 _) =
-          let rookCol1 = if col2 > col1 then maxX bnds else minX bnds
-              rookCol2 = col2 + signum (col1 - col2)
-              rookSqr1 = Square rookCol1 row
-              rookSqr2 = Square rookCol2 row
-          in handleMove (move brd kng (Square col2 row)) rookSqr1 rookSqr2
-            
-
 safeSquare :: [Square] -> String -> Maybe Square
 safeSquare bnds [a,n] = let sqr = strSqr [a,n]
                         in if elem sqr bnds then Just sqr else Nothing
 safeSquare _ _ = Nothing
-
-squareSelect :: String -> [Square] -> IO (Maybe Square)
-squareSelect msg bnds = do
-  putStr msg
-  sqr <- getLine
-  case sqr of
-    "cancel" -> return Nothing
-    sqr -> case safeSquare bnds sqr of
-             Nothing -> do putStrLn "Not a valid square, try again."
-                           squareSelect msg bnds
-             Just sqr -> return (Just sqr)
 
 cycleEnumSucc :: (Eq a, Enum a, Bounded a) => a -> a
 cycleEnumSucc e = if e == maxBound then minBound else succ e
@@ -333,8 +308,8 @@ instance Show Game where
 
 printGame :: Game -> IO ()
 printGame (Game brd trn) = do
-  printBoard $ showPieces brd
-  putStrLn ("Turn: " ++ show trn)
+  putStrLn $ showBoardFlipped $ showPieces brd
+  putStrLn $ show trn ++ " to move"
 
 pawnPromote :: Board -> Square -> Maybe Color
 pawnPromote brd@(Board _ bnds) sqr = case lookupS' brd sqr of
@@ -367,16 +342,66 @@ promoteMaybe brd sqr =
 
 type Move = (Square, Square)
 
+forcedMoves :: Board -> Color -> [Square]
+forcedMoves brd colr =
+  let checks' = checks brd colr
+      checkAttackers = case listToMaybe checks' of
+                         Nothing -> []
+                         Just chk -> 
+                           case lookupS brd chk of
+                             Nothing -> []
+                             Just (Piece _ color' _ _) -> map (targeters validMoves brd color') checks'
+  in if not . null $ checks'
+     then let (Piece King _ sqr _) = fromJust (king brd colr)
+          in sqr:(concat checkAttackers)
+     else []
+
+squareSelect :: String -> (Square -> Bool) -> [Square] -> IO (Maybe Square)
+squareSelect msg isValid bnds = do
+  putStr msg
+  sqr <- getLine
+  case sqr of
+    "cancel" -> return Nothing
+    sqr -> case safeSquare bnds sqr of
+             Nothing -> do putStrLn "Not a valid square, try again."
+                           squareSelect msg isValid bnds
+             Just sqr -> if isValid sqr
+               then return (Just sqr)
+               else do
+               putStrLn "Not a valid move, try again."
+               squareSelect msg isValid bnds
+
+handleMove :: Board -> Square -> Square -> Board
+handleMove brd sqr1@(Square col1 _) sqr2@(Square col2 _) =
+  case lookupS brd sqr1 of
+    Nothing -> brd
+    Just pc@(Piece King _ _ _) ->
+      let dx = abs (col1 - col2)
+      in if dx > 1
+         then castle brd pc sqr2
+         else move brd pc sqr2
+    Just pc -> move brd pc sqr2
+  where castle brd@(Board _ bnds) kng@(Piece King _ (Square col1 row) _) (Square col2 _) =
+          let rookCol1 = if col2 > col1 then maxX bnds else minX bnds
+              rookCol2 = col2 + signum (col1 - col2)
+              rookSqr1 = Square rookCol1 row
+              rookSqr2 = Square rookCol2 row
+          in handleMove (move brd kng (Square col2 row)) rookSqr1 rookSqr2
+            
 getMove :: Game -> IO (Maybe Move)
 getMove (Game brd trn) = do
-  sqr1 <- squareSelect "Enter square to move: " $ coloredSquares brd trn
+  let validSqrs1 = case forcedMoves brd trn of
+        [] -> coloredSquares brd trn
+        fm -> fm
+  sqr1 <- squareSelect "Enter square to move: " (\x -> True) validSqrs1
   case sqr1 of
     Nothing -> return Nothing
     Just s1 -> do
-      sqr2 <- squareSelect "Enter destination square: " $ validMoves brd $ lookupS' brd s1
+      sqr2 <- squareSelect "Enter destination square: " (notCheck s1) $ validMoves brd $ lookupS' brd s1
       case sqr2 of
         Nothing -> return Nothing
         Just s2 -> return $ Just (s1, s2)
+  where notCheck sqr1 sqr2 = null . checks (handleMove brd sqr1 sqr2) $ trn
 
 play :: Game -> IO Game
 play game@(Game brd trn) = do

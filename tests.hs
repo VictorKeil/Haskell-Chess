@@ -20,9 +20,14 @@ testPieces = nubBy (\(Piece t1 _ _ _) (Piece t2 _ _ _) -> t1 == t2) $ concat
 applyPair f p = f (fst p) (snd p)
 mapPair f (a, b) = (f a, f b)
 k1 = (Piece King White (Square 5 1) (Square 5 1))
+q1 = Piece Queen White (Square 5 5) (Square 5 5)
 testBoard = foldr (flip insertPiece) emptyBoard
   [k1
+  ,q1
   ,Piece Rook White (Square 8 1) (Square 8 1)
-  ,Piece Rook White (Square 1 1) (Square 1 1)
-  ,Piece Rook Black (Square 3 4) (Square 1 1)]
+  ,Piece Rook White (Square 3 2) (Square 1 1)
+  ,Piece Rook Black (Square 5 4) (Square 1 1)
+  ,Piece Bishop Black (Square 3 3) (Square 3 3)]
+
+playTest = play (Game testBoard White)
 
