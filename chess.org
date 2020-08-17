@@ -1,11 +1,18 @@
 #+TITLE: Haskell chess
 
-* Issues [0/1]
-- [ ] King can target squares which are attacked
+* Issues [1/1]
+- [X] King can target squares which are attacked
 * Refactors
 ** Use targeters instead of targetedSquares
 *** Needed refactors [3/3]
 - [X] validMoves
 - [X] checks
 - [X] checkMate
-
+* Features
+** Network
+*** Two way random color verification
+1. Peggy (prover) sends Victor (verifier) a commitment of a random number rp
+2. Victor generates a random number rv and sends that to Peggy
+3. Peggy generates a new random number from rv and rp and sends that to Victor,
+   along with the value of the commitment
+   
