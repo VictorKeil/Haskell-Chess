@@ -4,6 +4,7 @@ import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as B
+import qualified Data.ByteArray as A
 import qualified Data.ByteString.Char8 as C
 import qualified Control.Exception as E
 import Control.Concurrent
@@ -16,31 +17,39 @@ import Data.Serialize
 import Data.Serialize.Put
 import GHC.IO.Handle.FD
 import System.IO
+import Crypto.Random
+import Crypto.Hash
+import Crypto.Error
+import Data.Int
+import Data.Function
+import Data.Bits
+import Crypto.Data.Padding
 
 import Chess
 
-data SyncRole = First | Second deriving (Show)
+data SyncRole = Bob | Alice deriving (Show)
+
+_ACC = B.singleton 1 :: B.ByteString
+_NOACC = B.singleton 0 :: B.ByteString
+
+_SEED_SIZE = 16 :: Int
 
 getSyncRole :: Get SyncRole
 getSyncRole = do
   w <- getWord8
   case w of
-    0 -> return First
-    1 -> return Second
+    0 -> return Bob
+    1 -> return Alice
     _ -> fail $ "invalid SyncRole value: '" ++ show w ++ "'"
 
 instance Serialize SyncRole where
-  put First = putWord8 $ toEnum 0
-  put Second = putWord8 $ toEnum 1
+  put Bob = putWord8 $ toEnum 0
+  put Alice = putWord8 $ toEnum 1
   get = getSyncRole
-
-_ACC = B.singleton 1 :: B.ByteString
-_NOACC = B.singleton 0 :: B.ByteString
 
 sendRole :: Socket -> SyncRole -> IO ()
 sendRole sock role = do
   sendAll sock $ encode role
-  putStrLn "waiting for role ACC"
   acc <- recv sock 1
   case acc of
     _ | acc == _ACC -> return ()
@@ -48,7 +57,6 @@ sendRole sock role = do
 
 acceptRole :: Socket -> IO SyncRole
 acceptRole sock = do
-  putStrLn $ "waiting for role..."
   msg <- recv sock 1
   if not . B.null $ msg
     then
@@ -67,18 +75,21 @@ acceptRole sock = do
 initCon :: HostName -> ServiceName -> IO Socket
 initCon host port = withSocketsDo $ do
   timed <- newChan
+  addr <- resolve
+  sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
   timeoutId <- forkIO $ timeout' 3000000 timed
-  connId <- forkOS $ tryConnect timed
+  connId <- forkOS $ tryConnect sock addr timed
   msock <- readChan timed
   case msock of
     Nothing -> do
-      putStrLn "Timed out, killing conn sock"
+      putStrLn "Timed out, closing connect socket"
+      close sock
       killThread connId
       waitForOpp host port
     Just sock -> do
       killThread timeoutId
       putStrLn $ "Connected to " ++ host ++ " on port " ++ port
-      sendRole sock First
+      sendRole sock Bob
       return sock
   where
     timeout' delay chan = do
@@ -90,9 +101,7 @@ initCon host port = withSocketsDo $ do
             , addrSocketType = Stream
             }
       head <$> getAddrInfo (Just hints) (Just host) (Just port)
-    tryConnect chan = do
-        addr <- resolve
-        sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
+    tryConnect sock addr chan = do
         putStrLn $ "Trying to connect to " ++ host
         connect sock (addrAddress addr) `E.catch` notifyFail chan
         withFdSocket sock (threadWaitWrite . Fd)
@@ -135,17 +144,80 @@ waitForOpp remote port = withSocketsDo $ do
         checkIp sock
     eqAddr a1 a2 = True
 
+unlessACC :: Socket -> (Socket -> IO a) -> IO ()
+unlessACC sock handler = do
+  acc <- recv sock 1
+  case acc of
+    _ | acc == _ACC -> return ()
+      | otherwise -> void $ handler sock
+ 
+combineSeeds :: A.ByteArrayAccess ba => ba -> ba -> Seed
+combineSeeds sa sb =
+  let mrab = seedFromBinary $ pad (ZERO 40) $ B.pack $ (zipWith xor `on` A.unpack) sa sb
+  in case mrab of
+       CryptoPassed rab -> rab
+       CryptoFailed err -> error $ "error: " ++ show err
+
+randomColor :: Seed -> SyncRole -> Color
+randomColor seed role =
+  let roleFlip = case role of
+        Bob -> xor 1
+        Alice -> id
+      (bytes, _) = randomBytesGenerate 1 $ drgNewSeed seed
+      rab = B.head bytes
+  in toEnum . fromEnum $ (roleFlip rab .&. 1)
+
+  
+-- |Negotiates a random number with an untrusted party, "Alice"
+getRandomBob :: Socket -> IO Color
+getRandomBob sock = do
+  rb <- getRandomBytes _SEED_SIZE :: IO B.ByteString
+  let commit = hashWith SHA3_256 rb
+  sendAll sock $ B.pack . A.unpack $ commit
+
+  ra <- recv sock _SEED_SIZE
+  sendAll sock rb
+
+  unlessACC sock getRandomBob
+
+  return $ randomColor (combineSeeds ra rb) Bob
+
+-- |Negotiates a random number with an untrusted party, "Bob"
+getRandomAlice :: Socket -> IO Color
+getRandomAlice sock = do
+  commit <- recv sock 32
+
+  ra <- getRandomBytes _SEED_SIZE :: IO B.ByteString
+  sendAll sock ra
+
+  rb <- recv sock _SEED_SIZE
+  let verify = hashWith SHA3_256 rb
+  case (B.pack . A.unpack) verify == commit of
+    True -> sendAll sock _ACC
+    False -> do
+      sendAll sock _NOACC
+      void $ getRandomAlice sock
+
+  return $ randomColor (combineSeeds ra rb) Alice
+
 syncStart :: Socket -> IO Color
 syncStart sock = do
   role <- acceptRole sock
-  putStrLn $ "accepted role: " ++ show role
+  putStrLn $ "Accepted role: " ++ show role
   case role of
-    First -> sendRole sock Second
-    _ -> return ()
-    
-  return White
+    Bob -> do
+      sendRole sock Alice
+      getRandomBob sock
+    _ -> do
+      getRandomAlice sock
 
 main = do
   sock <- initCon "localhost" "30001"
-  syncStart sock
+
+  putStrLn $ "Initiating color handshake"
+  colr <- syncStart sock
+  putStr "Color handshake succesful, "
+  putStrLn $ "color: " ++ show colr
+
+  
 
