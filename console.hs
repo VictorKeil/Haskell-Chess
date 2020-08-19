@@ -93,16 +93,16 @@ squareSelect msg bnds = do
                            squareSelect msg bnds
              Just sqr -> return $ Just sqr
 
-freeSelect :: IO (Maybe Move)
-freeSelect = do
+freeSelect :: Game -> IO (Either ConsoleError Move)
+freeSelect game = do
   putStr "Enter any move: "
   str <- getLine
   case str of
-    "cancel" -> return Nothing
-    [a,n,' ',a',n'] -> return $ Just (strSqr [a,n], strSqr [a',n'])
+    "cancel" -> return $ Left (CancelError game)
+    [a,n,' ',a',n'] -> return $ Right (strSqr [a,n], strSqr [a',n'])
     _ -> do
       putStrLn "Invalid format, try again."
-      freeSelect
+      freeSelect game
 
 getMove :: Game -> IO (Either ConsoleError Move)
 getMove game@(Game brd lastMv ps@(P _ trn:_)) = do
@@ -123,4 +123,4 @@ getMove game@(Game brd lastMv ps@(P _ trn:_)) = do
 
 getMoveDebug game = do
   printGame game
-  freeSelect
+  freeSelect game

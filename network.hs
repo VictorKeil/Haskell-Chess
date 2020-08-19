@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
 module Network where
 
 import Network.Socket
@@ -41,10 +42,10 @@ data NetworkErrorCritical = UntrustedHostError deriving (Show)
 instance CriticalError NetworkErrorCritical where
   trigger = show
 
-data NetworkError = InvalidMoveError Game
+data NetworkError = InvalidMoveError
 
-instance MoveError NetworkError where
-  handleError (InvalidMoveError game) = Left 
+instance MoveError NetworkError NetworkErrorCritical where
+  handleError InvalidMoveError = Left UntrustedHostError
 
 _ACC = B.singleton 1 :: B.ByteString
 _NOACC = B.singleton 0 :: B.ByteString
@@ -231,6 +232,7 @@ getMove sock game@(Game brd lastMv ps@(P _ trn:_)) = do
       withFdSocket sock (threadWaitRead . Fd)
   recvMv
   where
+    recvMv :: IO (Either NetworkError Move)
     recvMv = do
       msg <- recv sock 32
       putStrLn $ "msg: " ++ show (B.unpack msg)
@@ -238,7 +240,7 @@ getMove sock game@(Game brd lastMv ps@(P _ trn:_)) = do
         Left e -> do
           putStrLn $ e ++ "Invalid move format received"
           sendAll sock _NOACC
-          recvMv
+          return $ Left InvalidMoveError
         Right oppMv -> do
           case liftM (validMove brd trn) oppMv of
             Nothing -> do
@@ -248,11 +250,11 @@ getMove sock game@(Game brd lastMv ps@(P _ trn:_)) = do
             Just False -> do
               sendAll sock _NOACC
               putStrLn $ "Invalid move received: '" ++ show (fromJust oppMv) ++ "'"
-              Left InvalidMoveError
+              return $ Left InvalidMoveError
             Just True -> do
               putStrLn $ "Got move: " ++ show (fromJust oppMv)
               sendAll sock _ACC
-              return $ Right oppMv
+              return $ Right (fromJust oppMv)
 
 init :: HostName -> ServiceName -> IO (Socket, (Color, Color))
 init host port = withSocketsDo $ do
