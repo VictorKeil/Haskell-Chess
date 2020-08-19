@@ -40,13 +40,17 @@ class CriticalError e where
 class CriticalError ce => MoveError e ce | e -> ce where
   handleError :: e -> Either ce Game
 
-data Player = forall e ce. (MoveError e ce) => P (Game -> IO (Either e Move)) Color
+class MoveError e ce => Player p e ce | p -> e where
+  color :: p -> Color
+  getMove :: p -> Game -> IO (Either e Move)
 
-data Game = Game Board (Maybe Move) [Player]
+data WPlayer = forall p e ce. Player p e ce => WPlayer p
+
+data Game = Game Board (Maybe Move) [WPlayer]
 instance Show Game where
   show (Game _ _ ps) = "Game - Turn: " ++ case listToMaybe ps of
                                           Nothing -> ""
-                                          Just (P _ trn) -> show trn
+                                          Just (WPlayer p) -> show $ color p
 
 width :: Bounds -> Int
 width (Bounds minX _ maxX _) = maxX - minX + 1
@@ -304,11 +308,11 @@ handleMove brd sqr1@(Square col1 _) sqr2@(Square col2 _) =
           in handleMove (move brd kng (Square col2 row)) rookSqr1 rookSqr2
             
 play :: Game -> IO Game
-play game@(Game brd lastMv ((P mf trn):ps)) = do
-  if checkMate brd trn
-    then return (Game brd lastMv [P mf trn])
+play game@(Game brd lastMv ((WPlayer p):ps)) = do
+  if checkMate brd (color p)
+    then return (Game brd lastMv [WPlayer p])
     else do
-    failableMv <- mf game
+    failableMv <- getMove p game
     case failableMv of
       Left e ->
         case handleError e of

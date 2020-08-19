@@ -47,6 +47,12 @@ data NetworkError = InvalidMoveError
 instance MoveError NetworkError NetworkErrorCritical where
   handleError InvalidMoveError = Left UntrustedHostError
 
+data NetworkPlayer = NetworkP Socket Color
+
+instance Player NetworkPlayer NetworkError NetworkErrorCritical where
+  color (NetworkP _ color) = color
+  getMove (NetworkP sock _) = getMoveNetwork sock
+
 _ACC = B.singleton 1 :: B.ByteString
 _NOACC = B.singleton 0 :: B.ByteString
 
@@ -222,13 +228,13 @@ syncStart sock = do
       seed <- getRandomAlice sock
       return $ (randomColor seed Alice, randomColor seed Bob)
 
-getMove :: Socket -> Game -> IO (Either NetworkError Move)
-getMove sock game@(Game brd lastMv ps@(P _ trn:_)) = do
+getMoveNetwork :: Socket -> Game -> IO (Either NetworkError Move)
+getMoveNetwork sock game@(Game brd lastMv ps@(WPlayer p:_)) = do
   case lastMv of
     Nothing -> return ()
     Just mv -> do
       sendAll sock $ encode lastMv
-      unlessACC sock $ (flip getMove) game 
+      unlessACC sock $ (flip getMoveNetwork) game 
       withFdSocket sock (threadWaitRead . Fd)
   recvMv
   where
@@ -242,7 +248,7 @@ getMove sock game@(Game brd lastMv ps@(P _ trn:_)) = do
           sendAll sock _NOACC
           return $ Left InvalidMoveError
         Right oppMv -> do
-          case liftM (validMove brd trn) oppMv of
+          case liftM (validMove brd (color p)) oppMv of
             Nothing -> do
               sendAll sock _NOACC
               putStrLn $ "NOMOVE received"
@@ -256,8 +262,8 @@ getMove sock game@(Game brd lastMv ps@(P _ trn:_)) = do
               sendAll sock _ACC
               return $ Right (fromJust oppMv)
 
-init :: HostName -> ServiceName -> IO (Socket, (Color, Color))
-init host port = withSocketsDo $ do
+initN :: HostName -> ServiceName -> IO (Socket, (Color, Color))
+initN host port = withSocketsDo $ do
   sock <- initCon "localhost" "30001"
 
   putStrLn $ "Initiating color handshake"

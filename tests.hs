@@ -33,3 +33,5 @@ testBoard = foldr (flip insertPiece) emptyBoard
 playTest = play (Game testBoard White)
 
 
+
+

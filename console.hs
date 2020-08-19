@@ -10,15 +10,32 @@ import Utils
 import Chess
 
 data ConsoleErrorCritical = ConsoleErrorCritical deriving (Show)
+
 instance CriticalError ConsoleErrorCritical where
   trigger = show
 
 data ConsoleError = CancelError Game
+
 instance MoveError ConsoleError ConsoleErrorCritical where
   handleError (CancelError game) = Right game
 
 instance Show Board where
   show brd = showBoard $ showPieces brd
+
+data ConsolePlayer = ConsoleP Color
+
+instance Player ConsolePlayer ConsoleError ConsoleErrorCritical where
+  color (ConsoleP colr) = colr
+  getMove p = getMoveConsole
+
+-- data ConTest = CT
+
+-- instance CriticalError ConTest where
+--   trigger _ = "test"
+
+-- instance Player ConsolePlayer ConsoleError ConTest where
+--   color (ConsoleP colr) = colr
+--   getMove p = getMoveConsole
 
 modBoard :: Char -> Square -> [String] -> [String]
 modBoard c sqrs strs = reverse . imap (rowMapper c sqrs) $ reverse strs
@@ -62,19 +79,19 @@ printBoard brd = do
   putStrLn $ brd
 
 printGame :: Game -> IO ()
-printGame (Game brd _ (P _ trn:_)) = do
-  printBoard $ (if trn == White then showBoard else showBoardFlipped) $ showPieces brd
-  putStrLn $ show trn ++ " to move"
+printGame (Game brd _ (WPlayer p:_)) = do
+  printBoard $ (if (color p) == White then showBoard else showBoardFlipped) $ showPieces brd
+  putStrLn $ show (color p) ++ " to move"
 
 printSquares :: Game -> [Square] -> IO ()
-printSquares (Game brd _ (P _ trn:_)) sqrs = do
-  printBoard $ (if trn == White then showBoard else showBoardFlipped)
+printSquares (Game brd _ (WPlayer p:_)) sqrs = do
+  printBoard $ (if (color p) == White then showBoard else showBoardFlipped)
     $ markSquaresWith '.' sqrs $ showPieces brd
 
 printMoves :: Game -> [Square] -> IO ()
 printMoves game (s:[]) = printSquares game [s]
-printMoves (Game brd _ (P _ trn:_)) (s:ss) =
-  printBoard $ (if trn == White then showBoard else showBoardFlipped)
+printMoves (Game brd _ (WPlayer p:_)) (s:ss) =
+  printBoard $ (if (color p) == White then showBoard else showBoardFlipped)
     $ markSquaresWith 'O' [s] $ markSquaresWith '.' ss $ showPieces brd
 
 safeSquare :: [Square] -> String -> Maybe Square
@@ -104,10 +121,10 @@ freeSelect game = do
       putStrLn "Invalid format, try again."
       freeSelect game
 
-getMove :: Game -> IO (Either ConsoleError Move)
-getMove game@(Game brd lastMv ps@(P _ trn:_)) = do
+getMoveConsole :: Game -> IO (Either ConsoleError Move)
+getMoveConsole game@(Game brd lastMv ps@(WPlayer p:_)) = do
   printGame game
-  sqr1 <- squareSelect "Enter square to move: " $ coloredSquares brd trn
+  sqr1 <- squareSelect "Enter square to move: " $ coloredSquares brd (color p)
   case sqr1 of
     Nothing -> return $ Left (CancelError game)
     Just s1 -> do
@@ -117,10 +134,10 @@ getMove game@(Game brd lastMv ps@(P _ trn:_)) = do
       case sqr2 of
         Nothing -> return $ Left (CancelError game)
         Just s2 -> do
-          printGame (Game (handleMove brd s1 s2) lastMv ([P getMove trn]))
+          printGame (Game (handleMove brd s1 s2) lastMv ps)
           return $ Right (s1, s2)
-  where notCheck sqr1 sqr2 = null . checks (handleMove brd sqr1 sqr2) $ trn
+  where notCheck sqr1 sqr2 = null . checks (handleMove brd sqr1 sqr2) $ (color p)
 
-getMoveDebug game = do
+getMoveConsoleDebug game = do
   printGame game
   freeSelect game
