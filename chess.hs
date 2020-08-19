@@ -1,3 +1,4 @@
+{-# LANGUAGE FunctionalDependencies, MultiParamTypeClasses, ExistentialQuantification #-}
 module Chess where
 
 import Data.Maybe
@@ -27,9 +28,25 @@ data Piece = Piece PieceType Color Square Square deriving (Show)
 
 data Bounds = Bounds {minX :: Int, minY :: Int, maxX :: Int, maxY :: Int} deriving (Show)
 
+type BoardMap = HMap.Map Square Piece
+
 data Board = Board BoardMap Bounds
 
-type BoardMap = HMap.Map Square Piece
+type Move = (Square, Square)
+
+class CriticalError e where
+  trigger :: e -> String
+
+class CriticalError ce => MoveError e ce | e -> ce where
+  handleError :: e -> Either ce Game
+
+data Player = forall e ce. (MoveError e ce) => P (Game -> IO (Either e Move)) Color
+
+data Game = Game Board (Maybe Move) [Player]
+instance Show Game where
+  show (Game _ _ ps) = "Game - Turn: " ++ case listToMaybe ps of
+                                          Nothing -> ""
+                                          Just (P _ trn) -> show trn
 
 width :: Bounds -> Int
 width (Bounds minX _ maxX _) = maxX - minX + 1
@@ -219,21 +236,6 @@ removePiece :: Board -> Piece -> Board
 removePiece (Board brd bnds) (Piece _ _ sqr _) =
   (Board (HMap.delete sqr brd) bnds)
 
-safeSquare :: [Square] -> String -> Maybe Square
-safeSquare bnds [a,n] = let sqr = strSqr [a,n]
-                        in if elem sqr bnds then Just sqr else Nothing
-safeSquare _ _ = Nothing
-
-type Move = (Square, Square)
-
-data Player = P (Game -> IO (Maybe Move)) Color
-
-data Game = Game Board (Maybe Move) [Player]
-instance Show Game where
-  show (Game _ _ ps) = "Game - Turn: " ++ case listToMaybe ps of
-                                          Nothing -> ""
-                                          Just (P _ trn) -> show trn
-
 pawnPromote :: Board -> Square -> Maybe Color
 pawnPromote brd@(Board _ bnds) sqr = case lookupS' brd sqr of
                         (Piece Pawn White (Square _ row) _) ->
@@ -277,6 +279,13 @@ forcedMoves brd colr =
           in sqr:(concat checkAttackers)
      else []
 
+validMove :: Board -> Color -> Move -> Bool
+validMove brd colr (s1, s2) =
+  case lookupS brd s1 of
+    Nothing -> False
+    Just pc@(Piece _ c sqr _)| c == colr -> s2 `elem` validMoves brd pc
+                             |otherwise -> False
+
 handleMove :: Board -> Square -> Square -> Board
 handleMove brd sqr1@(Square col1 _) sqr2@(Square col2 _) =
   case lookupS brd sqr1 of
@@ -299,10 +308,15 @@ play game@(Game brd lastMv ((P mf trn):ps)) = do
   if checkMate brd trn
     then return (Game brd lastMv [P mf trn])
     else do
-    mv <- mf game
-    case mv of
-      Nothing -> play game
-      Just (s1, s2) -> do
+    failableMv <- mf game
+    case failableMv of
+      Left e ->
+        case handleError e of
+          Left ce -> do
+            putStrLn $ trigger ce
+            return game
+          Right game -> play game
+      Right (s1, s2) -> do
         newBrd <- promoteMaybe (handleMove brd s1 s2) s2
         play $ Game newBrd (Just (s1, s2)) ps
 

@@ -2,6 +2,7 @@ module Main where
 
 import Chess
 import qualified Console as C
+-- import qualified Network as N
 
 board = foldr (flip insertPiece) emptyBoard pieces
   where pieces = let whitePRow = 2
@@ -21,4 +22,15 @@ board = foldr (flip insertPiece) emptyBoard pieces
           in (whitePawns ++ whiteRooks ++ whiteKnights ++ whiteBishops ++ whiteQueen ++ whiteKing)
           ++ (blackPawns ++ blackRooks ++ blackKnights ++ blackBishops ++ blackQueen ++ blackKing)
 
-main = play (Game board Nothing (cycle [P C.getMove White, P C.getMove Black]))
+
+
+-- playNetwork = do
+--   (sock, (myColr, oppColr)) <- N.init "localhost" "30001"
+--   case myColr of
+--     _| myColr == White -> play (Game board Nothing (cycle [P C.getMoveDebug White, P (N.getMove sock) Black]))
+--      | otherwise -> play (Game board Nothing (cycle [P (N.getMove sock) White, P C.getMoveDebug Black]))
+
+playOffline = play (Game board Nothing (cycle [P C.getMove White, P C.getMove Black]))
+  
+  
+main = playOffline

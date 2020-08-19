@@ -1,3 +1,4 @@
+{-# LANGUAGE ExistentialQuantification, RankNTypes #-}
 module Test where
 
 import Chess
@@ -30,4 +31,5 @@ testBoard = foldr (flip insertPiece) emptyBoard
   ,Piece Bishop Black (Square 3 3) (Square 3 3)]
 
 playTest = play (Game testBoard White)
+
 

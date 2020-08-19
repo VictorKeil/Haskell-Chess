@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiParamTypeClasses, ExistentialQuantification #-}
 module Console where
 
 import qualified Data.HashMap as HMap
@@ -7,6 +8,14 @@ import qualified System.Console.ANSI as ANSI
 
 import Utils
 import Chess
+
+data ConsoleErrorCritical = ConsoleErrorCritical deriving (Show)
+instance CriticalError ConsoleErrorCritical where
+  trigger = show
+
+data ConsoleError = CancelError Game
+instance MoveError ConsoleError ConsoleErrorCritical where
+  handleError (CancelError game) = Right game
 
 instance Show Board where
   show brd = showBoard $ showPieces brd
@@ -68,6 +77,11 @@ printMoves (Game brd _ (P _ trn:_)) (s:ss) =
   printBoard $ (if trn == White then showBoard else showBoardFlipped)
     $ markSquaresWith 'O' [s] $ markSquaresWith '.' ss $ showPieces brd
 
+safeSquare :: [Square] -> String -> Maybe Square
+safeSquare bnds [a,n] = let sqr = strSqr [a,n]
+                        in if elem sqr bnds then Just sqr else Nothing
+safeSquare _ _ = Nothing
+
 squareSelect :: String -> [Square] -> IO (Maybe Square)
 squareSelect msg bnds = do
   putStr msg
@@ -79,17 +93,34 @@ squareSelect msg bnds = do
                            squareSelect msg bnds
              Just sqr -> return $ Just sqr
 
-getMove :: Game -> IO (Maybe Move)
+freeSelect :: IO (Maybe Move)
+freeSelect = do
+  putStr "Enter any move: "
+  str <- getLine
+  case str of
+    "cancel" -> return Nothing
+    [a,n,' ',a',n'] -> return $ Just (strSqr [a,n], strSqr [a',n'])
+    _ -> do
+      putStrLn "Invalid format, try again."
+      freeSelect
+
+getMove :: Game -> IO (Either ConsoleError Move)
 getMove game@(Game brd lastMv ps@(P _ trn:_)) = do
   printGame game
   sqr1 <- squareSelect "Enter square to move: " $ coloredSquares brd trn
   case sqr1 of
-    Nothing -> return Nothing
+    Nothing -> return $ Left (CancelError game)
     Just s1 -> do
       let vm = validMoves brd $ lookupS' brd s1
       printMoves (Game brd lastMv ps) (s1:vm)
       sqr2 <- squareSelect "Enter destination square: " vm
       case sqr2 of
-        Nothing -> return Nothing
-        Just s2 -> return $ Just (s1, s2)
+        Nothing -> return $ Left (CancelError game)
+        Just s2 -> do
+          printGame (Game (handleMove brd s1 s2) lastMv ([P getMove trn]))
+          return $ Right (s1, s2)
   where notCheck sqr1 sqr2 = null . checks (handleMove brd sqr1 sqr2) $ trn
+
+getMoveDebug game = do
+  printGame game
+  freeSelect

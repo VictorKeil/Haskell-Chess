@@ -21,31 +21,35 @@ import Crypto.Random
 import Crypto.Hash
 import Crypto.Error
 import Data.Int
+import Data.Word
 import Data.Function
 import Data.Bits
+import Data.List
 import Crypto.Data.Padding
 
 import Chess
+import Serialize
 
-data SyncRole = Bob | Alice deriving (Show)
+data SyncRole = Bob | Alice deriving (Enum, Show)
+
+instance Serialize SyncRole where
+  put = putEnum8
+  get = getEnum8
+
+data NetworkErrorCritical = UntrustedHostError deriving (Show)
+
+instance CriticalError NetworkErrorCritical where
+  trigger = show
+
+data NetworkError = InvalidMoveError Game
+
+instance MoveError NetworkError where
+  handleError (InvalidMoveError game) = Left 
 
 _ACC = B.singleton 1 :: B.ByteString
 _NOACC = B.singleton 0 :: B.ByteString
 
 _SEED_SIZE = 16 :: Int
-
-getSyncRole :: Get SyncRole
-getSyncRole = do
-  w <- getWord8
-  case w of
-    0 -> return Bob
-    1 -> return Alice
-    _ -> fail $ "invalid SyncRole value: '" ++ show w ++ "'"
-
-instance Serialize SyncRole where
-  put Bob = putWord8 $ toEnum 0
-  put Alice = putWord8 $ toEnum 1
-  get = getSyncRole
 
 sendRole :: Socket -> SyncRole -> IO ()
 sendRole sock role = do
@@ -62,7 +66,7 @@ acceptRole sock = do
     then
     case decode msg of
       Left s -> do
-        putStrLn $ s ++ "acceptRole: NOACC, trying again"
+        putStrLn $ intercalate "; " . lines $ (s ++ "acceptRole: sending NOACC, trying again")
         sendAll sock _NOACC
         acceptRole sock
       Right r -> do
@@ -148,8 +152,12 @@ unlessACC :: Socket -> (Socket -> IO a) -> IO ()
 unlessACC sock handler = do
   acc <- recv sock 1
   case acc of
-    _ | acc == _ACC -> return ()
-      | otherwise -> void $ handler sock
+    _ | acc == _ACC -> do
+          putStrLn "Got ACC"
+          return ()
+      | otherwise -> do
+          putStrLn "Got NOACC"
+          void $ handler sock
  
 combineSeeds :: A.ByteArrayAccess ba => ba -> ba -> Seed
 combineSeeds sa sb =
@@ -169,7 +177,7 @@ randomColor seed role =
 
   
 -- |Negotiates a random number with an untrusted party, "Alice"
-getRandomBob :: Socket -> IO Color
+getRandomBob :: Socket -> IO Seed
 getRandomBob sock = do
   rb <- getRandomBytes _SEED_SIZE :: IO B.ByteString
   let commit = hashWith SHA3_256 rb
@@ -180,10 +188,10 @@ getRandomBob sock = do
 
   unlessACC sock getRandomBob
 
-  return $ randomColor (combineSeeds ra rb) Bob
+  return $ combineSeeds ra rb
 
 -- |Negotiates a random number with an untrusted party, "Bob"
-getRandomAlice :: Socket -> IO Color
+getRandomAlice :: Socket -> IO Seed
 getRandomAlice sock = do
   commit <- recv sock 32
 
@@ -198,26 +206,62 @@ getRandomAlice sock = do
       sendAll sock _NOACC
       void $ getRandomAlice sock
 
-  return $ randomColor (combineSeeds ra rb) Alice
+  return $ combineSeeds ra rb
 
-syncStart :: Socket -> IO Color
+syncStart :: Socket -> IO (Color, Color)
 syncStart sock = do
   role <- acceptRole sock
   putStrLn $ "Accepted role: " ++ show role
   case role of
     Bob -> do
       sendRole sock Alice
-      getRandomBob sock
+      seed <- getRandomBob sock
+      return $ (randomColor seed Bob, randomColor seed Alice)
     _ -> do
-      getRandomAlice sock
+      seed <- getRandomAlice sock
+      return $ (randomColor seed Alice, randomColor seed Bob)
 
-main = do
+getMove :: Socket -> Game -> IO (Either NetworkError Move)
+getMove sock game@(Game brd lastMv ps@(P _ trn:_)) = do
+  case lastMv of
+    Nothing -> return ()
+    Just mv -> do
+      sendAll sock $ encode lastMv
+      unlessACC sock $ (flip getMove) game 
+      withFdSocket sock (threadWaitRead . Fd)
+  recvMv
+  where
+    recvMv = do
+      msg <- recv sock 32
+      putStrLn $ "msg: " ++ show (B.unpack msg)
+      case decode msg of
+        Left e -> do
+          putStrLn $ e ++ "Invalid move format received"
+          sendAll sock _NOACC
+          recvMv
+        Right oppMv -> do
+          case liftM (validMove brd trn) oppMv of
+            Nothing -> do
+              sendAll sock _NOACC
+              putStrLn $ "NOMOVE received"
+              recvMv
+            Just False -> do
+              sendAll sock _NOACC
+              putStrLn $ "Invalid move received: '" ++ show (fromJust oppMv) ++ "'"
+              Left InvalidMoveError
+            Just True -> do
+              putStrLn $ "Got move: " ++ show (fromJust oppMv)
+              sendAll sock _ACC
+              return $ Right oppMv
+
+init :: HostName -> ServiceName -> IO (Socket, (Color, Color))
+init host port = withSocketsDo $ do
   sock <- initCon "localhost" "30001"
 
   putStrLn $ "Initiating color handshake"
-  colr <- syncStart sock
+  colrs <- syncStart sock
   putStr "Color handshake succesful, "
-  putStrLn $ "color: " ++ show colr
+  putStrLn $ "colors: " ++ show (fst colrs)
 
-  
+  return (sock, colrs)
 
