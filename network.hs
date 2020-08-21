@@ -264,12 +264,12 @@ getMoveNetwork sock game@(Game brd lastMv ps@(WPlayer p:_)) = do
 
 initN :: HostName -> ServiceName -> IO (Socket, (Color, Color))
 initN host port = withSocketsDo $ do
-  sock <- initCon "localhost" "30001"
+  sock <- initCon host port
 
   putStrLn $ "Initiating color handshake"
   colrs <- syncStart sock
   putStr "Color handshake succesful, "
-  putStrLn $ "colors: " ++ show (fst colrs)
+  putStrLn $ "color: " ++ show (fst colrs)
 
   return (sock, colrs)
 

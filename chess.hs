@@ -8,6 +8,7 @@ import Data.Tuple
 import Data.List
 import qualified Data.HashMap as HMap
 import Data.Hashable
+import Control.Applicative
 
 import Utils
 
@@ -164,7 +165,7 @@ validCastles brd@(Board _ bnds) k@(Piece King colr (Square col row) _) =
            castleSqrs = [[Square x row | x <- [left .. col]]
                         ,[Square x row | x <- [col .. right]]]
            rookValid = zipFilter (map not rooksMoved) castleSqrs
-           canCastle = map (not . any (\s -> not (nullSquare brd s) || targeted brd colr s)) rookValid
+           canCastle = map (not . any (liftA2 (||) (not . nullSquare brd) (targeted brd colr))) rookValid
            
        in zipFilter canCastle [Square left row, Square right row]
            
@@ -182,7 +183,8 @@ validMoves brd@(Board brdMap bnds) pc@(Piece Pawn color (Square col row) lSqr) =
       baseMoves = takeWhile (nullSquare brd) baseSquares
       
       tgtSqrs = targetSquares brd (Piece Pawn color (Square col row) lSqr)
-      validCaptures = filter (\s -> not (sameColor brd color s || nullSquare brd s)) tgtSqrs
+      -- validCaptures = filter (not . ((||) <$> sameColor brd color <*> nullSquare brd)) tgtSqrs
+      validCaptures = filter (not . liftA2 (||) (sameColor brd color) (nullSquare brd)) tgtSqrs
       preCheck = restrictToBounds bnds $ validCaptures ++ baseMoves
   in filter (\s -> not $ check (move brd pc s) color) preCheck
 

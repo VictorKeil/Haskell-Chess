@@ -1,9 +1,15 @@
 module Main where
 
+import System.IO
+import Control.Concurrent (threadDelay)
+
+import Lib
 import Chess
 import Console
 import Network
 
+data GameMode = Online | Offline
+  
 board = foldr (flip insertPiece) emptyBoard pieces
   where pieces = let whitePRow = 2
                      blackPRow = 7
@@ -22,15 +28,50 @@ board = foldr (flip insertPiece) emptyBoard pieces
           in (whitePawns ++ whiteRooks ++ whiteKnights ++ whiteBishops ++ whiteQueen ++ whiteKing)
           ++ (blackPawns ++ blackRooks ++ blackKnights ++ blackBishops ++ blackQueen ++ blackKing)
 
-
-
-playNetwork = do
-  (sock, (myColr, oppColr)) <- initN "localhost" "30001"
+playNetwork host port = do
+  (sock, (myColr, oppColr)) <- initN host port
   case myColr of
-    _| myColr == White -> play (Game board Nothing (cycle [WPlayer $ ConsoleP White, WPlayer $ NetworkP sock Black]))
-     | otherwise -> play (Game board Nothing (cycle [WPlayer $ NetworkP sock White, WPlayer $ ConsoleP Black]))
+    _| myColr == White -> do
+         putStrLn $ "You play: White"
+         threadDelay 800000
+         play $ Game board Nothing (cycle [WPlayer $ ConsoleP White, WPlayer $ NetworkP sock Black])
+     | otherwise -> do
+         let game = Game board Nothing (cycle [WPlayer $ NetworkP sock White, WPlayer $ ConsoleP Black])
+         putStrLn $ "You play: Black"
+         threadDelay 800000
+         printGame game
+         play game
 
 playOffline = play (Game board Nothing (cycle $ map WPlayer [ConsoleP White, ConsoleP Black]))
-  
-  
-main = playNetwork
+
+main = do
+  putStr $ unlines ["Welcome to Haskell Chess."
+                     ,"Online and offline play is supported"
+                     ,"To play o[f]fline, enter 'f'."
+                     ,"To pay o[n]line, enter 'n'."]
+  choice <- getChoice
+  case choice of
+    Offline -> playOffline
+    Online -> connectAndPlay
+  where
+    getChoice = do
+      hSetBuffering stdin NoBuffering
+      char <- getChar
+      putChar '\n'
+      hSetBuffering stdin LineBuffering
+      case char of
+        'f' -> return Offline
+        'n' -> return Online
+        _ -> do
+          putStrLn $ unlines ["Not a valid argument, try again."
+                             ,"To play o[f]fline, enter 'f'."
+                             ,"To pay o[n]line, enter 'n'."]
+          getChoice
+    connectAndPlay = do
+      putStr $ "Enter IP address of remote host: "
+      host <- getLine
+      putStr $ "Enter port: "
+      port <- getLine
+      playNetwork host port
+          
+          

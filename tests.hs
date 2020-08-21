@@ -3,6 +3,7 @@ module Test where
 
 import Chess
 import Data.List
+import Control.Monad
 
 testBounds :: Piece -> [Square]
 testBounds pc = let (Board _ bnds) = emptyBoard
@@ -30,8 +31,13 @@ testBoard = foldr (flip insertPiece) emptyBoard
   ,Piece Rook Black (Square 5 4) (Square 1 1)
   ,Piece Bishop Black (Square 3 3) (Square 3 3)]
 
-playTest = play (Game testBoard White)
 
-
-
+filterM' :: Monad m => (a -> m Bool) -> [a] -> m [a]
+filterM' p [] = return []
+filterM' p (x:xs) = do
+  b <- p x
+  case b of
+    True -> do
+      (x:) <$> filterM p xs
+    False -> filterM p xs
 
